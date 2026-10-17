@@ -28,6 +28,12 @@ static IOPCIDevice	*gPci;
 static IOWorkLoop	*gWorkLoop;
 static IOMemoryMap	*gBarMap[6];
 
+struct qwzmac_timer;
+static IOLock		*gTimerLock;	/* protects gTimers */
+static qwzmac_timer	*gTimers;
+static volatile int	 gTimersDead;
+static volatile int	 gTimersRunning;
+
 #define QWZMAC_MAX_INTR	4
 struct qwzmac_intr {
 	IOFilterInterruptEventSource *src;
@@ -48,12 +54,21 @@ qwzmac_os_init(IOService *owner, IOPCIDevice *pci)
 	gSpl = IORecursiveLockAlloc();
 	if (gSpl == nullptr)
 		return false;
+	gTimerLock = IOLockAlloc();
 	gWorkLoop = IOWorkLoop::workLoop();
-	if (gWorkLoop == nullptr) {
+	if (gWorkLoop == nullptr || gTimerLock == nullptr) {
+		if (gWorkLoop != nullptr)
+			gWorkLoop->release();
+		gWorkLoop = nullptr;
+		if (gTimerLock != nullptr)
+			IOLockFree(gTimerLock);
+		gTimerLock = nullptr;
 		IORecursiveLockFree(gSpl);
 		gSpl = nullptr;
 		return false;
 	}
+	gTimers = nullptr;
+	gTimersDead = 0;
 	gOwner = owner;
 	gPci = pci;
 	bzero(gIntr, sizeof(gIntr));
@@ -61,9 +76,12 @@ qwzmac_os_init(IOService *owner, IOPCIDevice *pci)
 	return true;
 }
 
+static void qwzmac_timers_fini(void);
+
 void
 qwzmac_os_fini(void)
 {
+	qwzmac_timers_fini();
 	/* Also removes sources whose removal had to be deferred. */
 	for (int i = 0; i < QWZMAC_MAX_INTR; i++) {
 		qwzmac_intr *ih = &gIntr[i];
@@ -234,13 +252,19 @@ qwzmac_thread_start(void (*fn)(void *), void *arg)
 /*
  * thread_call_cancel_wait() is private KPI, so running callbacks are
  * counted here and waited for by polling.
+ *
+ * Every timer is also kept on a list: a timeout(9) lives inside a softc,
+ * and nothing in qwz/net80211 frees its thread_call. qwzmac_timers_quiesce()
+ * stops them all before the softc is freed, os_fini frees them.
  */
 struct qwzmac_timer {
 	thread_call_t	tc;
 	void		(*fn)(void *);
 	void		*arg;
 	volatile int	running;
+	qwzmac_timer	*next, **prevp;
 };
+
 
 static void
 qwzmac_timer_main(thread_call_param_t p0, thread_call_param_t p1)
@@ -248,9 +272,44 @@ qwzmac_timer_main(thread_call_param_t p0, thread_call_param_t p1)
 	qwzmac_timer *t = (qwzmac_timer *)p0;
 
 	(void)p1;
+	__atomic_add_fetch(&gTimersRunning, 1, __ATOMIC_SEQ_CST);
 	__atomic_add_fetch(&t->running, 1, __ATOMIC_SEQ_CST);
-	t->fn(t->arg);
+	if (!__atomic_load_n(&gTimersDead, __ATOMIC_SEQ_CST))
+		t->fn(t->arg);
 	__atomic_sub_fetch(&t->running, 1, __ATOMIC_SEQ_CST);
+	__atomic_sub_fetch(&gTimersRunning, 1, __ATOMIC_SEQ_CST);
+}
+
+void
+qwzmac_timers_quiesce(void)
+{
+	__atomic_store_n(&gTimersDead, 1, __ATOMIC_SEQ_CST);
+	if (gTimerLock != nullptr) {
+		IOLockLock(gTimerLock);
+		for (qwzmac_timer *t = gTimers; t != nullptr; t = t->next)
+			thread_call_cancel(t->tc);
+		IOLockUnlock(gTimerLock);
+	}
+	while (__atomic_load_n(&gTimersRunning, __ATOMIC_SEQ_CST) > 0)
+		IOSleep(1);
+}
+
+static void
+qwzmac_timers_fini(void)
+{
+	qwzmac_timers_quiesce();
+	if (gTimerLock == nullptr)
+		return;
+	for (;;) {
+		IOLockLock(gTimerLock);
+		qwzmac_timer *t = gTimers;
+		IOLockUnlock(gTimerLock);
+		if (t == nullptr)
+			break;
+		qwzmac_timer_free(t);
+	}
+	IOLockFree(gTimerLock);
+	gTimerLock = nullptr;
 }
 
 void *
@@ -269,6 +328,13 @@ qwzmac_timer_alloc(void (*fn)(void *), void *arg)
 		IOFree(t, sizeof(*t));
 		return nullptr;
 	}
+	IOLockLock(gTimerLock);
+	t->next = gTimers;
+	if (gTimers != nullptr)
+		gTimers->prevp = &t->next;
+	t->prevp = &gTimers;
+	gTimers = t;
+	IOLockUnlock(gTimerLock);
 	return t;
 }
 
@@ -280,6 +346,11 @@ qwzmac_timer_free(void *p)
 	if (t == nullptr)
 		return;
 	qwzmac_timer_cancel_wait(t);
+	IOLockLock(gTimerLock);
+	*t->prevp = t->next;
+	if (t->next != nullptr)
+		t->next->prevp = t->prevp;
+	IOLockUnlock(gTimerLock);
 	if (!thread_call_free(t->tc)) {
 		QLOG("timer still pending at free, leaking it");
 		return;

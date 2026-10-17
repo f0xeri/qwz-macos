@@ -38,7 +38,7 @@ rw_enter(struct rwlock *rwl, int flags)
 			qwzmac_spl_unlock();
 			if (flags & RW_RECURSEFAIL)
 				return EDEADLK;
-			panic("rw_enter: %s: recursive write lock",
+			QWZMAC_WARN("rw_enter: %s: recursive write lock",
 			    rwl->rwl_name);
 			return EDEADLK;
 		}
@@ -133,28 +133,28 @@ void
 rw_assert_wrlock(struct rwlock *rwl)
 {
 	if (rwl->rwl_owner != curthread_id())
-		panic("%s: lock not held by this thread", rwl->rwl_name);
+		QWZMAC_WARN("%s: lock not held by this thread", rwl->rwl_name);
 }
 
 void
 rw_assert_rdlock(struct rwlock *rwl)
 {
 	if (rwl->rwl_readers == 0)
-		panic("%s: lock not shared", rwl->rwl_name);
+		QWZMAC_WARN("%s: lock not shared", rwl->rwl_name);
 }
 
 void
 rw_assert_anylock(struct rwlock *rwl)
 {
 	if (rwl->rwl_owner == 0 && rwl->rwl_readers == 0)
-		panic("%s: lock not held", rwl->rwl_name);
+		QWZMAC_WARN("%s: lock not held", rwl->rwl_name);
 }
 
 void
 rw_assert_unlocked(struct rwlock *rwl)
 {
 	if (rwl->rwl_owner == curthread_id())
-		panic("%s: lock held", rwl->rwl_name);
+		QWZMAC_WARN("%s: lock held", rwl->rwl_name);
 }
 
 /* refcnt(9) */

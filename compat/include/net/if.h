@@ -50,6 +50,18 @@
 #define	IFXF_MPSAFE		0x1
 #define	IFXF_MONITOR		0x100
 
+#define	IF_Kbps(x)	((x) * 1000ULL)
+#define	IF_Mbps(x)	(IF_Kbps((x) * 1000ULL))
+#define	IF_Gbps(x)	(IF_Mbps((x) * 1000ULL))
+
+#define	IFCAP_CSUM_IPv4		0x00000001
+#define	IFCAP_CSUM_TCPv4	0x00000002
+#define	IFCAP_CSUM_UDPv4	0x00000004
+#define	IFCAP_VLAN_MTU		0x00000010
+#define	IFCAP_VLAN_HWTAGGING	0x00000020
+
+#define	IF_WIRELESS_DEFAULT_PRIORITY	4
+
 #define	IFT_ETHER	0x06
 #define	IFT_IEEE80211	0x47
 
@@ -99,12 +111,13 @@ struct ifnet {
 	uint32_t if_capabilities;
 	uint64_t if_data_counters[ifc_ncounters];
 	uint32_t if_hardmtu;
+	int	if_priority;
 
 	void	(*if_start)(struct ifnet *);
 	int	(*if_ioctl)(struct ifnet *, u_long, caddr_t);
 	void	(*if_watchdog)(struct ifnet *);
 	int	(*if_output)(struct ifnet *, struct mbuf *, struct sockaddr *,
-		    void *);
+		    struct rtentry *);
 
 	struct	ifqueue if_snd;
 	struct	timeout if_slowtimo;	/* QWZMAC: drives if_watchdog */
@@ -153,6 +166,16 @@ struct	ifreq {
 #define ifr_index	ifr_ifru.ifru_index
 };
 
+/* message format used to pass 80211 interface info */
+struct if_ieee80211_data {
+	uint8_t		ifie_channel;	/* IEEE80211_CHAN_MAX  == 255 */
+	uint8_t		ifie_nwid_len;
+	uint32_t	ifie_flags;	/* ieee80211com.ic_flags */
+	uint32_t	ifie_xflags;	/* ieee80211com.ic xflags */
+	uint8_t		ifie_nwid[32];	/* IEEE80211_NWID_LEN */
+	uint8_t		ifie_addr[6];	/* IEEE80211_ADDR_LEN */
+};
+
 struct ifmediareq {
 	char		ifm_name[IFNAMSIZ];
 	uint64_t	ifm_current;
@@ -196,5 +219,7 @@ struct ifnet *if_get(unsigned int);
 void	if_put(struct ifnet *);
 void	if_up(struct ifnet *);
 void	if_down(struct ifnet *);
+void	if_deactivate(struct ifnet *);
+void	if_addgroup(struct ifnet *, const char *);
 
 #endif /* _QWZMAC_NET_IF_H_ */

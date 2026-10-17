@@ -23,10 +23,10 @@ CXXFLAGS=(-std=gnu++17 -fapple-kext -fno-rtti -fno-exceptions)
 BSDFLAGS=($ARCH -x c -std=gnu11 -mkernel -ffreestanding -fno-builtin -fno-common -O2
           -nostdinc -isystem "$RD/include" -D_KERNEL -DQWZMAC -DQWZ_DEBUG -I compat/include -I .
           -Wall -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable
-          -Wno-sign-conversion -Wno-shorten-64-to-32 -Wno-implicit-int-conversion)
+          -Wno-sign-conversion -Wno-shorten-64-to-32 -Wno-implicit-int-conversion -Wno-pointer-sign)
 OBJS=()
-for src in qwz/*.c compat/*.c; do
-  o=$OUT/obj/bsd_${src:t:r}.o; clang "${BSDFLAGS[@]}" -c $src -o $o; OBJS+=$o
+for src in qwz/*.c compat/*.c net80211/*.c crypto/*.c; do
+  o=$OUT/obj/bsd_${src:h:t}_${src:t:r}.o; clang "${BSDFLAGS[@]}" -c $src -o $o; OBJS+=$o
 done
 for src in kext/*.cpp; do
   o=$OUT/obj/${src:t:r}.o; clang++ "${COMMON[@]}" "${CXXFLAGS[@]}" -c $src -o $o; OBJS+=$o

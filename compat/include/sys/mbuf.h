@@ -30,6 +30,21 @@ struct m_tag {
 	u_int16_t		m_tag_len;
 };
 
+#define	PACKET_TAG_DLT		0x0100	/* data link layer type */
+
+struct mbuf;
+
+/*
+ * QWZMAC: our mbufs never carry tags (only bpf(4) injection adds
+ * PACKET_TAG_DLT, and there is no bpf), so lookups always miss.
+ */
+static inline struct m_tag *
+m_tag_find(struct mbuf *m, u_int16_t type, struct m_tag *t)
+{
+	(void)m; (void)type; (void)t;
+	return ((struct m_tag *)0);
+}
+
 #define	mtod(m,t)	((t)((m)->m_data))
 
 struct m_hdr {

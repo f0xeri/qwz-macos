@@ -56,6 +56,11 @@ int	qwzmac_timer_enter(void *t, uint64_t nsecs);
 int	qwzmac_timer_cancel(void *t);
 /* Cancel and wait for a running callback to finish. */
 int	qwzmac_timer_cancel_wait(void *t);
+/*
+ * Cancel every timer, wait for running callbacks, and make later firings
+ * no-ops. Call without the spl lock, before freeing the softc.
+ */
+void	qwzmac_timers_quiesce(void);
 
 /*
  * Physically contiguous, wired DMA memory with lo <= pa && pa + size - 1 <= hi.

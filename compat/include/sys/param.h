@@ -39,6 +39,7 @@
 #define MAX(a, b)	(((a) > (b)) ? (a) : (b))
 #define ALIGNBYTES	(sizeof(long) - 1)
 #define ALIGN(p)	(((unsigned long)(p) + ALIGNBYTES) & ~ALIGNBYTES)
+#define ALIGNED_POINTER(p, t)	1	/* amd64: unaligned access is fine */
 
 static inline u_int min(u_int a, u_int b) { return a < b ? a : b; }
 static inline u_int max(u_int a, u_int b) { return a > b ? a : b; }

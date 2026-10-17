@@ -19,6 +19,9 @@ int	qwzmac_qwz_attach(void *pcidev, void **devp);
 /* Wait for bring-up to finish, detach qwz and free everything. */
 void	qwzmac_qwz_detach(void *dev);
 
+/* System shutdown/restart: stop the device's DMA. Never blocks. */
+void	qwzmac_qwz_shutdown(void *dev);
+
 #ifdef __cplusplus
 }
 #endif

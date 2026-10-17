@@ -24,7 +24,7 @@ qwzmac_printf(const char *fmt, ...)
 }
 
 void
-qwzmac_panic(const char *file, int line, const char *fmt, ...)
+qwzmac_warn(const char *file, int line, const char *fmt, ...)
 {
 	char buf[256];
 	va_list ap;
@@ -35,6 +35,25 @@ qwzmac_panic(const char *file, int line, const char *fmt, ...)
 	qwzmac_log("QwzWifi: PANIC (not halting) at %s:%d: %s\n",
 	    file, line, buf);
 	qwzmac_backtrace();
+}
+
+void
+qwzmac_panic(const char *file, int line, const char *fmt, ...)
+{
+	static int parked;
+	char buf[256];
+	va_list ap;
+
+	va_start(ap, fmt);
+	vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+	qwzmac_log("QwzWifi: PANIC at %s:%d: %s; parking this thread, "
+	    "the driver is dead until reboot\n", file, line, buf);
+	qwzmac_backtrace();
+	/* qwzmac_sleep() releases the spl lock while sleeping. */
+	qwzmac_spl_lock();
+	for (;;)
+		qwzmac_sleep(&parked, 0);
 }
 
 /*

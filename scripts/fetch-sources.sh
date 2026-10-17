@@ -16,7 +16,9 @@ clone() { # url dir commit [sparse paths...]
 # OpenBSD qwz(4) — the driver we port (ISC). 2026-10-16 snapshot.
 clone https://github.com/openbsd/src.git openbsd 9d744686b24f92bf6b45ab8178191c31ccb26da5 \
   '/sys/dev/ic/qwz*' '/sys/dev/pci/if_qwz*' '/sys/dev/ic/qwx*' '/sys/dev/pci/if_qwx*' '/sys/net80211/' \
-  /share/man/man4/qwz.4 /sys/dev/pci/pcireg.h /sys/dev/pci/pcidevs.h
+  /share/man/man4/qwz.4 /sys/dev/pci/pcireg.h /sys/dev/pci/pcidevs.h \
+  '/sys/crypto/' /sys/net/if.h /sys/net/if_var.h /sys/net/if_media.h /sys/net/if_media.c \
+  /sys/net/if_dl.h /sys/net/if_llc.h /sys/net/if_ethersubr.c /sys/netinet/ip.h /sys/netinet/ip6.h
 # itlwm — macOS wrapper + itl80211 (old OpenBSD net80211 port) (GPL-2.0)
 clone https://github.com/OpenIntelWireless/itlwm.git itlwm 53c51c2cdd6e4b69beb91f310d74c53422b0f8bd
 # Kernel headers for building on any machine (acidanthera)

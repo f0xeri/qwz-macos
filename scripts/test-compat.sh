@@ -12,7 +12,8 @@ CF=(-std=gnu11 -O1 -g -fsanitize=address -ffreestanding -nostdinc -isystem $RD/i
     -Wall -Wno-unused-function -Wno-sign-conversion)
 OBJS=()
 for src in compat/systm.c compat/sync.c compat/task.c compat/uipc_mbuf.c \
-    compat/bus_dma.c compat/subr_tree.c compat/qwzmac_debug.c tests/compat_test.c; do
+    compat/bus_dma.c compat/subr_tree.c compat/qwzmac_debug.c compat/if.c compat/if_ether.c \
+    tests/compat_test.c; do
   o=$OUT/${src:t:r}.o; clang "${CF[@]}" -c $src -o $o; OBJS+=$o
 done
 clang -std=gnu11 -O1 -g -fsanitize=address -Wall -c tests/os_user.c -o $OUT/os_user.o

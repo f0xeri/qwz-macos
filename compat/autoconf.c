@@ -12,6 +12,7 @@
 #include <sys/task.h>
 #include <sys/rwlock.h>
 #include <sys/refcnt.h>
+#include <sys/sockio.h>
 
 #include <machine/bus.h>
 #include <machine/intr.h>
@@ -72,10 +73,43 @@ mountroot_report(struct device *dev)
 	    n, bytes / 1024);
 }
 
+/*
+ * Stage 2: scan only. This is "ifconfig qwz0 debug bssid <none> up":
+ *  - IFF_DEBUG makes net80211's ieee80211_match_bss() print every network
+ *    found (bssid, channel, RSSI, SSID) after each scan;
+ *  - a desired BSSID that no AP has makes every candidate fail, so
+ *    net80211 never joins anything and keeps rescanning (marked '!').
+ * Called from the bring-up thread without the spl lock, like an ioctl.
+ */
+static void
+stage2_scan(struct qwz_softc *sc)
+{
+	struct ieee80211com *ic = &sc->sc_ic;
+	struct ifnet *ifp = &ic->ic_if;
+	struct ifreq ifr;
+	int error;
+
+	memset(ic->ic_des_bssid, 0, IEEE80211_ADDR_LEN);
+	ic->ic_flags |= IEEE80211_F_DESBSSID;
+	ifp->if_flags |= IFF_DEBUG;
+
+	if_up(ifp);
+	memset(&ifr, 0, sizeof(ifr));
+	strlcpy(ifr.ifr_name, ifp->if_xname, sizeof(ifr.ifr_name));
+	ifr.ifr_flags = ifp->if_flags;
+	error = ifp->if_ioctl(ifp, SIOCSIFFLAGS, (caddr_t)&ifr);
+	if (error)
+		printf("QwzWifi: stage 2: interface up failed: %d\n", error);
+	else
+		printf("QwzWifi: stage 2: interface up, scanning "
+		    "(scan only, networks are listed after each scan)\n");
+}
+
 static void
 mountroot_thread(void *arg)
 {
 	struct mountroot_hook *h = arg;
+	struct qwz_softc *sc = (struct qwz_softc *)h->dev;
 	uint64_t t0 = getnsecuptime();
 
 	printf("QwzWifi: firmware bring-up thread started\n");
@@ -83,6 +117,8 @@ mountroot_thread(void *arg)
 	printf("QwzWifi: bring-up took %llu ms\n",
 	    (unsigned long long)((getnsecuptime() - t0) / 1000000));
 	mountroot_report(h->dev);
+	if (sc->attached)
+		stage2_scan(sc);
 
 	qwzmac_spl_lock();
 	mountroot_pending--;
@@ -216,8 +252,21 @@ qwzmac_qwz_detach(void *p)
 	mountroot_wait();
 
 	if (qd->attached) {
+		struct ifnet *ifp =
+		    &((struct qwz_softc *)qd->dev)->sc_ic.ic_if;
+
 		qwz_pci_ca.ca_detach(qd->dev, 0);
 		pci_bus_master_off(qd->pc);
+		/*
+		 * QWZMAC: qwz's detach leaves net80211 attached (OpenBSD
+		 * never detaches it in practice). Undo it, then stop every
+		 * timeout and task before the softc that holds them goes.
+		 */
+		if_down(ifp);
+		ieee80211_ifdetach(ifp);
+		if_detach(ifp);
+		qwzmac_timers_quiesce();
+		qwzmac_taskq_fini();
 		free(qd->dev, M_DEVBUF, qwz_pci_ca.ca_devsize);
 	} else {
 		/*
@@ -227,9 +276,24 @@ qwzmac_qwz_detach(void *p)
 		 */
 		pci_bus_master_off(qd->pc);
 		printf("QwzWifi: leaking half-attached softc\n");
+		qwzmac_taskq_fini();
 	}
 
-	qwzmac_taskq_fini();
 	free(qd, M_DEVBUF, sizeof(*qd));
 	printf("QwzWifi: qwz detached\n");
+}
+
+/*
+ * System shutdown or restart: the chip may be scanning, i.e. writing into
+ * host RAM. Stop it from mastering the bus so nothing it does can reach
+ * memory the next boot stage reuses. No firmware teardown: it can block.
+ */
+void
+qwzmac_qwz_shutdown(void *p)
+{
+	struct qwzmac_dev *qd = p;
+
+	if (qd == NULL)
+		return;
+	pci_bus_master_off(qd->pc);
 }

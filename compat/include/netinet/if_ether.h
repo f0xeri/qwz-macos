@@ -27,6 +27,7 @@
 #define ETHERTYPE_VLAN		0x8100
 #define ETHERTYPE_IPV6		0x86DD
 #define ETHERTYPE_PAE		0x888E
+#define ETHERTYPE_EAPOL		ETHERTYPE_PAE
 #define ETHERTYPE_QINQ		0x88A8
 
 struct ether_addr {
@@ -65,9 +66,13 @@ extern u_int8_t etheranyaddr[ETHER_ADDR_LEN];
 void	ether_ifattach(struct ifnet *);
 void	ether_ifdetach(struct ifnet *);
 int	ether_ioctl(struct ifnet *, struct arpcom *, u_long, caddr_t);
+int	ether_output(struct ifnet *, struct mbuf *, struct sockaddr *,
+	    struct rtentry *);
 char	*ether_sprintf(u_char *);
 int	ether_addmulti(struct ifreq *, struct arpcom *);
 int	ether_delmulti(struct ifreq *, struct arpcom *);
+u_int32_t ether_crc32_le_update(u_int32_t, const u_int8_t *, size_t);
+u_int32_t ether_crc32_be_update(u_int32_t, const u_int8_t *, size_t);
 u_int32_t ether_crc32_le(const u_int8_t *, size_t);
 u_int32_t ether_crc32_be(const u_int8_t *, size_t);
 

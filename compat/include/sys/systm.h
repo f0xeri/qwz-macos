@@ -49,15 +49,23 @@ int	 qwzmac_printf(const char *, ...)
 #define LOG_DEBUG	7
 
 /*
- * panic(9) and KASSERT(9): log loudly instead of crashing the machine. A
- * panic during boot with -qwzon would mean a boot loop for the user.
+ * panic(9) and KASSERT(9) must not crash the machine: a panic during boot
+ * with -qwzon would mean a boot loop for the user.
+ *  - panic() does not return, as in OpenBSD (code after it may rely on
+ *    that): it logs, then parks the calling thread forever with the spl
+ *    lock released. The driver stops working, the machine keeps running
+ *    and the log can still be read.
+ *  - KASSERT() and our own compat checks only log and continue.
  */
 void	 qwzmac_panic(const char *file, int line, const char *fmt, ...)
+	    __attribute__((__format__(__printf__, 3, 4), __noreturn__));
+void	 qwzmac_warn(const char *file, int line, const char *fmt, ...)
 	    __attribute__((__format__(__printf__, 3, 4)));
 #define panic(...)	qwzmac_panic(__FILE__, __LINE__, __VA_ARGS__)
+#define QWZMAC_WARN(...) qwzmac_warn(__FILE__, __LINE__, __VA_ARGS__)
 #define KASSERT(e)	do {						\
 	if (__predict_false(!(e)))					\
-		qwzmac_panic(__FILE__, __LINE__, "KASSERT %s", #e);	\
+		qwzmac_warn(__FILE__, __LINE__, "KASSERT %s", #e);	\
 } while (0)
 #define KASSERTMSG(e, ...) KASSERT(e)
 #define KDASSERT(e)	do { } while (0)
@@ -109,6 +117,35 @@ uint32_t arc4random_uniform(uint32_t);
 #define NET_ASSERT_LOCKED()	do { } while (0)
 
 extern int cold;
+
+static inline int abs(int j) { return j < 0 ? -j : j; }
+
+/*
+ * There are no OpenBSD processes. net80211's ioctl path checks
+ * suser(curproc); every ioctl comes from our own kext (later from its user
+ * client, which does its own privilege check).
+ */
+struct proc;
+#define curproc		((struct proc *)0)
+static inline int suser(struct proc *p) { (void)p; return 0; }
+
+/*
+ * QWZMAC: ioctl argument copies. Every ifnet ioctl is issued by the kext
+ * itself with kernel buffers, so these are plain copies. A future user
+ * client must copy user data in itself before calling ifp->if_ioctl.
+ */
+static inline int
+copyin(const void *uaddr, void *kaddr, size_t len)
+{
+	memcpy(kaddr, uaddr, len);
+	return 0;
+}
+static inline int
+copyout(const void *kaddr, void *uaddr, size_t len)
+{
+	memcpy(uaddr, kaddr, len);
+	return 0;
+}
 
 /* QWZMAC: log the strings of a firmware RAM dump (compat/qwzmac_debug.c). */
 void	 qwzmac_rddm_report(const uint8_t *, size_t);

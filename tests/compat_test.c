@@ -13,6 +13,8 @@
 #include <sys/refcnt.h>
 #include <sys/device.h>
 #include <machine/bus.h>
+#include <net/if.h>
+#include <netinet/if_ether.h>
 
 extern int test_dma_fake_high;
 extern int test_quiet;
@@ -430,6 +432,21 @@ test_misc(void)
 	test_quiet = 0;
 }
 
+/* WEP/TKIP ICVs are ether_crc32_le_update() without the final xor. */
+static void
+test_crc32(void)
+{
+	static const u_int8_t check[] = "123456789";
+	u_int32_t crc;
+
+	CHECK(ether_crc32_le(check, 9) == ~0xcbf43926U);
+	crc = ether_crc32_le_update(0xffffffff, check, 4);
+	crc = ether_crc32_le_update(crc, check + 4, 5);
+	CHECK(crc == ~0xcbf43926U);
+	/* Same CRC with the register not reflected: bit-reversed value. */
+	CHECK(ether_crc32_be(check, 9) == 0x9b63d02cU);
+}
+
 static void
 test_rddm(void)
 {
@@ -447,6 +464,7 @@ int
 main(void)
 {
 	test_rddm();
+	test_crc32();
 	test_misc();
 	test_mbuf();
 	test_bus_dma();

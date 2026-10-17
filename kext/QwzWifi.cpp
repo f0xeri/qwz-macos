@@ -2,7 +2,9 @@
  * QwzWifi — Qualcomm WCN7850 (17cb:1107) driver for macOS, port of OpenBSD qwz(4).
  *
  * Stage 1: run qwz's attach unchanged (compat/autoconf.c) up to "firmware
- * ready" and the MAC address. No network interface is published yet.
+ * ready" and the MAC address.
+ * Stage 2: bring the interface up in scan-only mode; net80211 logs the
+ * networks it finds. No macOS network interface is published yet.
  *
  * Boot-args:
  *   -qwzon     required, otherwise the driver does not attach at all
@@ -15,6 +17,8 @@
 #include <IOKit/IOService.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/pci/IOPCIDevice.h>
+#include <IOKit/IOMessage.h>
+#include <IOKit/pwr_mgt/RootDomain.h>
 #include <pexpert/pexpert.h>
 
 #include "os_bridge.h"
@@ -34,10 +38,14 @@ public:
 
 private:
 	void logDevice(IOPCIDevice *pci);
+	static IOReturn powerMessage(void *target, void *refCon,
+	    UInt32 messageType, IOService *provider, void *arg,
+	    vm_size_t argSize);
 
 	IOPCIDevice	*fPci;
 	void		*fQwz;
 	bool		 fOsInit;
+	IONotifier	*fPowerNotifier;
 };
 
 OSDefineMetaClassAndStructors(QwzWifi, IOService)
@@ -108,6 +116,7 @@ QwzWifi::start(IOService *provider)
 	fPci = nullptr;
 	fQwz = nullptr;
 	fOsInit = false;
+	fPowerNotifier = nullptr;
 
 	if (!IOService::start(provider))
 		return false;
@@ -165,14 +174,46 @@ QwzWifi::start(IOService *provider)
 		return false;
 	}
 
+	/*
+	 * From stage 2 on the chip is running and writes into host RAM.
+	 * At shutdown/restart turn its bus mastering off. A priority
+	 * sleep/wake interest gets these messages without joining the power
+	 * plane (which would also make us handle sleep).
+	 */
+	fPowerNotifier = registerPrioritySleepWakeInterest(powerMessage, this);
+	if (fPowerNotifier == nullptr)
+		QLOG("no shutdown notification, DMA stays on at restart");
+
 	registerService();
 	return true;
+}
+
+IOReturn
+QwzWifi::powerMessage(void *target, void *refCon, UInt32 messageType,
+    IOService *provider, void *arg, vm_size_t argSize)
+{
+	QwzWifi *me = (QwzWifi *)target;
+
+	(void)refCon; (void)provider; (void)arg; (void)argSize;
+	if (messageType == kIOMessageSystemWillPowerOff ||
+	    messageType == kIOMessageSystemWillRestart) {
+		QLOG("system %s: stopping device DMA",
+		    messageType == kIOMessageSystemWillRestart ?
+		    "restart" : "power off");
+		qwzmac_qwz_shutdown(me->fQwz);
+	}
+	/* kIOReturnSuccess without a wait time acknowledges at once. */
+	return kIOReturnSuccess;
 }
 
 void
 QwzWifi::stop(IOService *provider)
 {
 	QLOG("stop");
+	if (fPowerNotifier != nullptr) {
+		fPowerNotifier->remove();
+		fPowerNotifier = nullptr;
+	}
 	if (fQwz != nullptr) {
 		qwzmac_qwz_detach(fQwz);
 		fQwz = nullptr;

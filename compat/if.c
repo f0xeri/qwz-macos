@@ -12,6 +12,7 @@
 #include <net/if.h>
 #include <netinet/in.h>
 #include <netinet/if_ether.h>
+#include <net/route.h>
 
 static void
 if_slowtimo(void *arg)
@@ -196,4 +197,36 @@ void
 if_put(struct ifnet *ifp)
 {
 	(void)ifp;
+}
+
+/* Undoes pseudo-interface (vlan, bridge) changes; there are none here. */
+void
+if_deactivate(struct ifnet *ifp)
+{
+	(void)ifp;
+}
+
+/* Interface groups ("wlan") are a userland convenience; not kept. */
+void
+if_addgroup(struct ifnet *ifp, const char *groupname)
+{
+	(void)ifp; (void)groupname;
+}
+
+/*
+ * Routing socket message net80211 sends when the link comes up. There is
+ * no routing socket; log it instead, it says which network we joined.
+ */
+void
+rtm_80211info(struct ifnet *ifp, struct if_ieee80211_data *ifie)
+{
+	char ssid[33];
+	size_t n = ifie->ifie_nwid_len;
+
+	if (n > sizeof(ifie->ifie_nwid))
+		n = sizeof(ifie->ifie_nwid);
+	memcpy(ssid, ifie->ifie_nwid, n);
+	ssid[n] = '\0';
+	printf("%s: joined \"%s\" bssid %s channel %u\n", ifp->if_xname,
+	    ssid, ether_sprintf(ifie->ifie_addr), ifie->ifie_channel);
 }
