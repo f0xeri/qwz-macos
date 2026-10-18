@@ -7,6 +7,7 @@
  * Stage 3: join the configured network (WPA2-PSK) and appear to macOS as
  * an Ethernet interface (itlwm style): Ethernet frames are copied between
  * macOS mbufs and OpenBSD mbufs in compat/autoconf.c.
+ * Stage 4: sleep/wake, packet counters, the link speed follows the TX rate.
  *
  * Boot-args:
  *   -qwzon     required, otherwise the driver does not attach at all
@@ -30,9 +31,11 @@
 #include <IOKit/network/IOEthernetController.h>
 #include <IOKit/network/IOEthernetInterface.h>
 #include <IOKit/network/IONetworkMedium.h>
+#include <IOKit/network/IONetworkStats.h>
 #include <IOKit/network/IOOutputQueue.h>
 #include <kern/thread_call.h>
 #include <sys/kpi_mbuf.h>
+#include <net/kpi_interface.h>
 #include <pexpert/pexpert.h>
 
 #include "os_bridge.h"
@@ -44,6 +47,9 @@
 /* 802.11 MTU (2304) plus the Ethernet header, as in compat/autoconf.c. */
 #define QWZ_FRAME_MAX	(2304 + 14)
 
+/* How often the link speed shown by macOS follows the firmware's TX rate. */
+#define QWZ_RATE_POLL_MS	2000
+
 extern "C" uint32_t qwz_debug;	/* qwz/qwz.c, built with QWZ_DEBUG */
 
 class QwzWifi : public IOEthernetController {
@@ -54,6 +60,7 @@ public:
 	void stop(IOService *provider) override;
 
 	bool createWorkLoop() override;
+	bool configureInterface(IONetworkInterface *netif) override;
 	IOWorkLoop *getWorkLoop() const override;
 	IOReturn enable(IONetworkInterface *netif) override;
 	IOReturn disable(IONetworkInterface *netif) override;
@@ -77,6 +84,7 @@ private:
 	static void netInput(void *cookie, const void *frame, size_t len);
 	static void netLink(void *cookie, int up, uint64_t baudrate);
 	static void linkTc(thread_call_param_t p0, thread_call_param_t p1);
+	void countStat(UInt32 IONetworkStats::*field);
 
 	IOPCIDevice	*fPci;
 	void		*fQwz;
@@ -92,7 +100,9 @@ private:
 
 	thread_call_t	 fLinkTc;	/* setLinkStatus() outside the spl lock */
 	volatile int	 fLinkUp;
-	volatile uint64_t fLinkSpeed;
+	volatile uint64_t fLinkSpeed;	/* last speed given to setLinkStatus() */
+	volatile uint64_t fLinkBaudrate; /* net80211's if_baudrate at link up */
+	IONetworkStats	*fNetStats;	/* netstat's packet and error counters */
 };
 
 OSDefineMetaClassAndStructors(QwzWifi, IOEthernetController)
@@ -223,6 +233,25 @@ QwzWifi::getWorkLoop() const
 	return fWorkLoop;
 }
 
+/*
+ * The interface keeps the packet counters netstat shows; the byte counters
+ * the network stack counts by itself.
+ */
+bool
+QwzWifi::configureInterface(IONetworkInterface *netif)
+{
+	IONetworkData *nd;
+
+	if (!IOEthernetController::configureInterface(netif))
+		return false;
+	nd = netif->getParameter(kIONetworkStatsKey);
+	if (nd != nullptr)
+		fNetStats = (IONetworkStats *)nd->getBuffer();
+	if (fNetStats == nullptr)
+		QLOG("no network statistics buffer, netstat will show 0 packets");
+	return true;
+}
+
 bool
 QwzWifi::start(IOService *provider)
 {
@@ -241,6 +270,8 @@ QwzWifi::start(IOService *provider)
 	fLinkTc = nullptr;
 	fLinkUp = 0;
 	fLinkSpeed = 0;
+	fLinkBaudrate = 0;
+	fNetStats = nullptr;
 	bzero(fMac, sizeof(fMac));
 	fIfLock = IOLockAlloc();
 	if (fIfLock == nullptr)
@@ -252,7 +283,7 @@ QwzWifi::start(IOService *provider)
 		return false;
 	}
 	qwzmac_log_start(pci);
-	QLOG("start, version 0.0.3 (built " __DATE__ " " __TIME__ ")");
+	QLOG("start, version 0.0.5 (built " __DATE__ " " __TIME__ ")");
 
 	if (!IOEthernetController::start(provider)) {
 		QLOG("IOEthernetController::start failed");
@@ -326,9 +357,10 @@ QwzWifi::start(IOService *provider)
 
 	/*
 	 * At shutdown/restart power the chip down, as Linux ath12k does
-	 * (compat/autoconf.c, qwzmac_qwz_shutdown()). A priority
-	 * sleep/wake interest gets these messages without joining the power
-	 * plane (which would also make us handle sleep).
+	 * (compat/autoconf.c, qwzmac_qwz_shutdown()); before sleep power it
+	 * down too and bring it up after wake. A priority sleep/wake
+	 * interest gets these messages before the drivers' own power
+	 * changes, without joining the power plane.
 	 */
 	fPowerNotifier = registerPrioritySleepWakeInterest(powerMessage, this);
 	if (fPowerNotifier == nullptr)
@@ -345,12 +377,26 @@ QwzWifi::powerMessage(void *target, void *refCon, UInt32 messageType,
 	QwzWifi *me = (QwzWifi *)target;
 
 	(void)refCon; (void)provider; (void)arg; (void)argSize;
-	if (messageType == kIOMessageSystemWillPowerOff ||
-	    messageType == kIOMessageSystemWillRestart) {
+	switch (messageType) {
+	case kIOMessageSystemWillPowerOff:
+	case kIOMessageSystemWillRestart:
 		QLOG("system %s: powering the chip down",
 		    messageType == kIOMessageSystemWillRestart ?
 		    "restart" : "power off");
 		qwzmac_qwz_shutdown(me->fQwz);
+		break;
+	case kIOMessageSystemWillSleep:
+		/* Blocks up to 10 s; priority clients get this before drivers sleep. */
+		QLOG("system sleep: powering the chip down");
+		qwzmac_qwz_sleep(me->fQwz);
+		break;
+	case kIOMessageSystemHasPoweredOn:
+		QLOG("system wake: bringing the chip up");
+		qwzmac_qwz_wake(me->fQwz);
+		break;
+	default:
+		QLOG("power message 0x%x", (unsigned)messageType);
+		break;
 	}
 	/* kIOReturnSuccess without a wait time acknowledges at once. */
 	return kIOReturnSuccess;
@@ -392,12 +438,23 @@ QwzWifi::netInput(void *cookie, const void *frame, size_t len)
 	if (netif == nullptr || len == 0 || len > QWZ_FRAME_MAX)
 		return;
 	m = me->allocatePacket((UInt32)len);
-	if (m == nullptr)
-		return;
-	if (mbuf_copyback(m, 0, len, frame, MBUF_DONTWAIT) != 0) {
+	if (m != nullptr && mbuf_copyback(m, 0, len, frame, MBUF_DONTWAIT) != 0) {
 		me->freePacket(m);
+		m = nullptr;
+	}
+	/*
+	 * netstat's Ipkts/Ibytes are the ifnet's own counters, and
+	 * inputPacket() without the input queue does not update them (Opkts
+	 * the stack counts on output by itself). Seen with 0.0.4: ioreg
+	 * showed inputPackets 42557, netstat Ipkts 0, Ibytes 0.
+	 */
+	if (m == nullptr) {
+		me->countStat(&IONetworkStats::inputErrors);
+		ifnet_stat_increment_in(netif->getIfnet(), 0, 0, 1);
 		return;
 	}
+	me->countStat(&IONetworkStats::inputPackets);
+	ifnet_stat_increment_in(netif->getIfnet(), 1, (u_int32_t)len, 0);
 	netif->inputPacket(m, (UInt32)len);
 }
 
@@ -411,22 +468,58 @@ QwzWifi::netLink(void *cookie, int up, uint64_t baudrate)
 {
 	QwzWifi *me = (QwzWifi *)cookie;
 
-	me->fLinkSpeed = baudrate;
+	me->fLinkBaudrate = baudrate;
+	me->fLinkSpeed = 0;	/* report the link again */
 	__atomic_store_n(&me->fLinkUp, up ? 1 : 0, __ATOMIC_SEQ_CST);
 	thread_call_enter(me->fLinkTc);
 }
 
+/*
+ * Thread call: report link changes, and while the link is up, re-check the
+ * TX rate every QWZ_RATE_POLL_MS so macOS shows the current speed (net80211
+ * sets if_baudrate only once, from the first rate it picks).
+ */
 void
 QwzWifi::linkTc(thread_call_param_t p0, thread_call_param_t p1)
 {
 	QwzWifi *me = (QwzWifi *)p0;
+	uint64_t speed, deadline;
 
 	(void)p1;
-	if (__atomic_load_n(&me->fLinkUp, __ATOMIC_SEQ_CST))
-		me->setLinkStatus(kIONetworkLinkValid | kIONetworkLinkActive,
-		    me->fMedium, me->fLinkSpeed);
-	else
+	if (!__atomic_load_n(&me->fLinkUp, __ATOMIC_SEQ_CST)) {
+		me->fLinkSpeed = 0;
 		me->setLinkStatus(kIONetworkLinkValid);
+		return;
+	}
+	speed = qwzmac_qwz_tx_rate(me->fQwz);
+	if (speed != 0 && speed != me->fLinkSpeed) {
+		me->fLinkSpeed = speed;
+		me->setLinkStatus(kIONetworkLinkValid | kIONetworkLinkActive,
+		    me->fMedium, speed);
+	} else if (me->fLinkSpeed == 0) {
+		me->fLinkSpeed = me->fLinkBaudrate;
+		me->setLinkStatus(kIONetworkLinkValid | kIONetworkLinkActive,
+		    me->fMedium, me->fLinkBaudrate);
+	}
+	IOLockLock(me->fIfLock);
+	if (!me->fStopping) {
+		clock_interval_to_deadline(QWZ_RATE_POLL_MS, kMillisecondScale,
+		    &deadline);
+		thread_call_enter_delayed(me->fLinkTc, deadline);
+	}
+	IOLockUnlock(me->fIfLock);
+}
+
+/*
+ * Counters are 32-bit and wrap, as in every IONetworking driver. Input runs
+ * under the spl lock and output in the network stack's thread, so add
+ * atomically.
+ */
+void
+QwzWifi::countStat(UInt32 IONetworkStats::*field)
+{
+	if (fNetStats != nullptr)
+		__atomic_fetch_add(&(fNetStats->*field), 1, __ATOMIC_RELAXED);
 }
 
 UInt32
@@ -443,17 +536,20 @@ QwzWifi::outputPacket(mbuf_t m, void *param)
 	if (len < 14 || len > sizeof(frame) ||
 	    mbuf_copydata(m, 0, len, frame) != 0) {
 		freePacket(m);
+		countStat(&IONetworkStats::outputErrors);
 		return kIOReturnOutputDropped;
 	}
 	freePacket(m);
 	error = qwzmac_qwz_output(fQwz, frame, len);
+	countStat(error == 0 ? &IONetworkStats::outputPackets :
+	    &IONetworkStats::outputErrors);
 	return error == 0 ? kIOReturnOutputSuccess : kIOReturnOutputDropped;
 }
 
 /*
  * The interface was brought up/down by macOS. The radio follows its own
- * life: it joins the network at boot and stays associated (stage 4 will
- * tie it to enable/disable and to sleep).
+ * life: it joins the network at boot and stays associated, except across
+ * sleep (powerMessage()).
  */
 IOReturn
 QwzWifi::enable(IONetworkInterface *netif)
@@ -536,6 +632,13 @@ QwzWifi::stop(IOService *provider)
 	netif = fNetIf;
 	fNetIf = nullptr;
 	IOLockUnlock(fIfLock);
+	/* linkTc() calls into qwz: wait for it (fStopping stops re-arming). */
+	if (fLinkTc != nullptr) {
+		while (thread_call_isactive(fLinkTc)) {
+			thread_call_cancel(fLinkTc);
+			IOSleep(5);
+		}
+	}
 	if (netif != nullptr) {
 		detachInterface(netif, true);
 		netif->release();
@@ -545,10 +648,6 @@ QwzWifi::stop(IOService *provider)
 		fQwz = nullptr;
 	}
 	if (fLinkTc != nullptr) {
-		while (thread_call_isactive(fLinkTc)) {
-			thread_call_cancel(fLinkTc);
-			IOSleep(5);
-		}
 		thread_call_free(fLinkTc);
 		fLinkTc = nullptr;
 	}

@@ -54,6 +54,12 @@ int	qwzmac_qwz_attach(void *pcidev, const struct qwzmac_netif_ops *ops,
 int	qwzmac_qwz_output(void *dev, const void *frame, size_t len);
 
 /*
+ * The rate the firmware currently sends at, in bit/s (estimated for HT,
+ * see compat/autoconf.c), or 0 when not associated.
+ */
+uint64_t qwzmac_qwz_tx_rate(void *dev);
+
+/*
  * Stop all calls into the kext (ops). When this returns, no callback is
  * running and none will start. Frames can still be sent.
  */
@@ -67,6 +73,14 @@ void	qwzmac_qwz_detach(void *dev);
  * then turn bus mastering off. Waits at most 10 s.
  */
 void	qwzmac_qwz_shutdown(void *dev);
+
+/*
+ * System sleep: power the chip down (qwz_activate(QUIESCE)), waiting at
+ * most 10 s. Wake: bring it up again in a thread (RESUME, WAKEUP); the
+ * interface joins the network again on its own.
+ */
+void	qwzmac_qwz_sleep(void *dev);
+void	qwzmac_qwz_wake(void *dev);
 
 #ifdef __cplusplus
 }

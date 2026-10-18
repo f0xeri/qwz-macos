@@ -25,6 +25,7 @@
 #include <net80211/ieee80211_var.h>
 #include <net80211/ieee80211_radiotap.h>
 #include <net80211/ieee80211_ioctl.h>
+#include <net80211/ieee80211_ra.h>
 
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pcivar.h>
@@ -466,6 +467,62 @@ qwzmac_qwz_output(void *p, const void *frame, size_t len)
 }
 
 /*
+ * The current TX rate in bit/s, or 0 when not associated. TX completions
+ * carry the rate the firmware used (qwz_dp_tx_complete_msdu() stores it in
+ * ni_txmcs / ni_txrate). For HT that is only the per-stream MCS (0-7), not
+ * the stream count, width or guard interval, so those are taken as
+ * negotiated: the streams both sides support (as qwz_peer_assoc_h_ht()
+ * counts them), 40 MHz as qwz sets up the peer, and short GI if both have it.
+ */
+uint64_t
+qwzmac_qwz_tx_rate(void *p)
+{
+	struct qwzmac_dev *qd = p;
+	struct ieee80211com *ic;
+	struct ieee80211_node *ni;
+	const struct ieee80211_ht_rateset *rs;
+	uint64_t rate = 0;
+	int i, mcs, nss, chan40, sgi;
+
+	if (qd == NULL || !qd->attached)
+		return 0;
+	ic = &((struct qwz_softc *)qd->dev)->sc_ic;
+
+	qwzmac_spl_lock();
+	ni = ic->ic_bss;
+	if (ic->ic_state != IEEE80211_S_RUN || ni == NULL) {
+		/* not associated */
+	} else if (ni->ni_flags & IEEE80211_NODE_HT) {
+		for (i = 0, nss = 1; i < 4; i++)
+			if (ic->ic_sup_mcs[i] & ni->ni_rxmcs[i])
+				nss = i + 1;
+		mcs = ni->ni_txmcs;
+		if (mcs < 8)
+			mcs += 8 * (nss - 1);
+		chan40 = IEEE80211_CHAN_40MHZ_ALLOWED(ni->ni_chan) &&
+		    ieee80211_node_supports_ht_chan40(ni) &&
+		    ((ni->ni_htop0 & IEEE80211_HTOP0_SCO_MASK) ==
+		    IEEE80211_HTOP0_SCO_SCA ||
+		    (ni->ni_htop0 & IEEE80211_HTOP0_SCO_MASK) ==
+		    IEEE80211_HTOP0_SCO_SCB);
+		sgi = ieee80211_ra_use_ht_sgi(ni);
+		for (i = 0; i < IEEE80211_HT_NUM_RATESETS; i++) {
+			rs = &ieee80211_std_ratesets_11n[i];
+			if (rs->chan40 == chan40 && rs->sgi == sgi &&
+			    mcs >= rs->min_mcs && mcs <= rs->max_mcs) {
+				rate = rs->rates[mcs - rs->min_mcs] * 500000ULL;
+				break;
+			}
+		}
+	} else if (ni->ni_txrate < ni->ni_rates.rs_nrates) {
+		rate = (ni->ni_rates.rs_rates[ni->ni_txrate] &
+		    IEEE80211_RATE_VAL) * 500000ULL;
+	}
+	qwzmac_spl_unlock();
+	return rate;
+}
+
+/*
  * input() and link() run with the spl lock held, so clearing ops under it
  * waits for a running one. ready() runs without it: mountroot_wait() in
  * detach covers that one.
@@ -540,54 +597,162 @@ qwzmac_qwz_detach(void *p)
  * reset). OpenBSD itself does not do this at reboot (its boot() only takes
  * interfaces down), but here the module keeps standby power across reboot
  * and S5, and a chip left running vanished from the bus (runs 7, 8, 12).
- * QWZMAC glue: it runs in a thread with QWZMAC_SHUTDOWN_NSEC, so a hung
- * chip cannot hang the macOS shutdown. Bus mastering goes off last.
+ * Bounded by qwzmac_activate_bounded(). Bus mastering goes off last.
  */
-#define QWZMAC_SHUTDOWN_NSEC	SEC_TO_NSEC(10)
+#define QWZMAC_POWER_NSEC	SEC_TO_NSEC(10)
 
-static int qwzmac_shutdown_done;
+static int qwzmac_power_done;
+
+struct qwzmac_power_job {
+	struct qwzmac_dev	*qd;
+	int			 act;	/* DVACT_* */
+};
 
 static void
-qwzmac_shutdown_thread(void *arg)
+qwzmac_power_thread(void *arg)
 {
-	struct qwzmac_dev *qd = arg;
+	struct qwzmac_power_job *job = arg;
 
-	qwz_activate(qd->dev, DVACT_QUIESCE);
+	qwz_activate(job->qd->dev, job->act);
 
 	qwzmac_spl_lock();
-	qwzmac_shutdown_done = 1;
-	qwzmac_wakeup(&qwzmac_shutdown_done, 0);
+	qwzmac_power_done = 1;
+	qwzmac_wakeup(&qwzmac_power_done, 0);
 	qwzmac_spl_unlock();
+}
+
+/*
+ * Run qwz_activate(act) in a thread and wait at most QWZMAC_POWER_NSEC,
+ * so a hung chip cannot hang a macOS shutdown or sleep. Returns 1 if it
+ * finished. The job stays allocated if it did not: the thread still
+ * holds it.
+ */
+static int
+qwzmac_activate_bounded(struct qwzmac_dev *qd, int act)
+{
+	struct qwzmac_power_job *job;
+	uint64_t deadline;
+	int done = 0;
+
+	job = malloc(sizeof(*job), M_DEVBUF, M_WAITOK | M_ZERO);
+	job->qd = qd;
+	job->act = act;
+	qwzmac_power_done = 0;
+	if (qwzmac_thread_start(qwzmac_power_thread, job) != 0) {
+		free(job, M_DEVBUF, sizeof(*job));
+		return 0;
+	}
+	deadline = getnsecuptime() + QWZMAC_POWER_NSEC;
+	qwzmac_spl_lock();
+	while (!qwzmac_power_done) {
+		uint64_t now = getnsecuptime();
+
+		if (now >= deadline)
+			break;
+		qwzmac_sleep(&qwzmac_power_done, deadline - now);
+	}
+	done = qwzmac_power_done;
+	qwzmac_spl_unlock();
+	if (done)
+		free(job, M_DEVBUF, sizeof(*job));
+	return done;
 }
 
 void
 qwzmac_qwz_shutdown(void *p)
 {
 	struct qwzmac_dev *qd = p;
-	uint64_t deadline;
-	int done = 0;
+	int done;
 
 	if (qd == NULL || !qd->attached)
 		return;
 	/* No calls into the kext from here on. */
 	qwzmac_qwz_disconnect(qd);
 
-	qwzmac_shutdown_done = 0;
-	if (qwzmac_thread_start(qwzmac_shutdown_thread, qd) == 0) {
-		deadline = getnsecuptime() + QWZMAC_SHUTDOWN_NSEC;
-		qwzmac_spl_lock();
-		while (!qwzmac_shutdown_done) {
-			uint64_t now = getnsecuptime();
-
-			if (now >= deadline)
-				break;
-			qwzmac_sleep(&qwzmac_shutdown_done, deadline - now);
-		}
-		done = qwzmac_shutdown_done;
-		qwzmac_spl_unlock();
-	}
+	done = qwzmac_activate_bounded(qd, DVACT_QUIESCE);
 	printf("QwzWifi: shutdown: chip %s\n", done ? "powered down" :
 	    "did not power down in time");
 	/* Last step: whatever state it is in, no more DMA into RAM. */
 	pci_bus_master_off(qd->pc);
+}
+
+/*
+ * System sleep and wake, as OpenBSD's config_suspend_all() and
+ * config_resume() drive qwz: DVACT_QUIESCE before sleep (qwz_stop(), then
+ * qwz_core_deinit(): the chip is powered down, no DMA), DVACT_SUSPEND
+ * (nothing in qwz); after wake DVACT_RESUME (HAL rings reset) and
+ * DVACT_WAKEUP (qwz_init(): firmware loaded again, the interface is still
+ * up, so net80211 joins the network again). That is the same bring-up as
+ * the first "ifconfig up" after qwz_attach(). macOS saves and restores
+ * the PCI config space (BARs, MSI) around sleep itself.
+ */
+static int qwzmac_suspended;	/* quiesced by qwzmac_qwz_sleep() */
+
+void
+qwzmac_qwz_sleep(void *p)
+{
+	struct qwzmac_dev *qd = p;
+	int done;
+
+	if (qd == NULL || !qd->attached || qwzmac_suspended)
+		return;
+	if (mountroot_pending > 0) {
+		/* Bring-up still running; its interface comes up after wake. */
+		printf("QwzWifi: sleep: bring-up still running, chip left as is\n");
+		return;
+	}
+	done = qwzmac_activate_bounded(qd, DVACT_QUIESCE);
+	if (done)
+		qwz_activate(qd->dev, DVACT_SUSPEND);
+	else
+		/* Hung: at least keep it from writing into RAM while we sleep. */
+		pci_bus_master_off(qd->pc);
+	qwzmac_suspended = done ? 1 : -1;
+	printf("QwzWifi: sleep: chip %s\n", done ? "powered down" :
+	    "did not power down in time, bus mastering off");
+}
+
+static void
+qwzmac_wake_thread(void *arg)
+{
+	struct qwzmac_dev *qd = arg;
+	pcireg_t id = 0xffffffff;
+	int i;
+
+	/* The device should be back in D0; give it a moment if not. */
+	for (i = 0; i < 50; i++) {
+		id = pci_conf_read(qd->pc, 0, PCI_ID_REG);
+		if (id != 0xffffffff && id != 0)
+			break;
+		tsleep_nsec(&qwzmac_suspended, 0, "qwzwake", MSEC_TO_NSEC(100));
+	}
+	if (id == 0xffffffff || id == 0) {
+		printf("QwzWifi: wake: device not on the bus, giving up\n");
+		return;
+	}
+	qwz_activate(qd->dev, DVACT_RESUME);
+	qwz_activate(qd->dev, DVACT_WAKEUP);
+	printf("QwzWifi: wake: chip up again\n");
+}
+
+void
+qwzmac_qwz_wake(void *p)
+{
+	struct qwzmac_dev *qd = p;
+	int was;
+
+	if (qd == NULL || !qd->attached)
+		return;
+	was = qwzmac_suspended;
+	qwzmac_suspended = 0;
+	if (was == 0)
+		return;
+	if (was < 0) {
+		printf("QwzWifi: wake: chip did not power down before sleep, "
+		    "leaving it off\n");
+		return;
+	}
+	/* Firmware loading takes seconds: not in the power message. */
+	if (qwzmac_thread_start(qwzmac_wake_thread, qd) != 0)
+		printf("QwzWifi: wake: cannot start the wake thread\n");
 }

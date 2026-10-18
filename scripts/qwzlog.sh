@@ -16,7 +16,7 @@ fi
 print -r -- "$log" > "$out"
 echo "saved $(wc -l < "$out" | tr -d ' ') lines to $out"
 echo "--- summary ---"
-grep -E 'stage [123]|bring-up took|Asserted|fatal firmware|MAC address|timeout|failed|PANIC|refused|joined|network interface|link (up|down)|interface (enabled|disabled)' "$out" | cut -c1-160 | head -30
+grep -E 'stage [123]|bring-up took|Asserted|fatal firmware|MAC address|timeout|failed|PANIC|refused|joined|network interface|link (up|down)|interface (enabled|disabled)|system (sleep|wake)|sleep: |wake: |power message' "$out" | cut -c1-160 | head -60
 # Stage 3: association (net80211 state changes) and the WPA2 4-way handshake.
 echo "--- association ---"
 grep -E 'qwz0: [A-Z]+ -> [A-Z]+|handshake|authentication failed|association failed|deauth|disassoc|with .* ssid|no beacons' "$out" |
