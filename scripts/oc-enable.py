@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Add/enable or disable QwzWifi in OpenCore config.plist (with backup).
-usage: oc-enable.py on|probe|off [/path/to/EFI/OC]
+usage: oc-enable.py on|probe|off [path/to/EFI/OC]   (default: the path in local/oc-dir)
   on     kext enabled, boot-arg -qwzon            (normal run)
   probe  kext enabled, boot-args -qwzon -qwzprobe (stage 0: read-only probe)
   off    kext disabled, no QwzWifi boot-args"""
@@ -8,7 +8,13 @@ import plistlib, shutil, sys, time, os
 mode = sys.argv[1] if len(sys.argv) > 1 else ''
 if mode not in ('on', 'probe', 'off'):
     sys.exit(__doc__)
-oc = sys.argv[2] if len(sys.argv) > 2 else '/path/to/EFI/OC'
+local = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'local', 'oc-dir')
+if len(sys.argv) > 2:
+    oc = sys.argv[2]
+elif os.path.exists(local):
+    oc = open(local).read().strip()
+else:
+    sys.exit('no OpenCore path: pass it, or put it into local/oc-dir')
 cfg = os.path.join(oc, 'config.plist')
 bak = cfg + '.before-qwz-' + time.strftime('%Y%m%d-%H%M%S')
 shutil.copy2(cfg, bak); print('backup:', bak)
