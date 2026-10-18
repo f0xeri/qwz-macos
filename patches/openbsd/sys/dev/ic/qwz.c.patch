@@ -1,24 +1,4 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: f0xeri <9pik.official@gmail.com>
-Date: Sun, 18 Oct 2026 04:43:06 -0700
-Subject: [PATCH] qwz: reset LMAC ring shadow pointers in qwz_hal_srng_setup()
-
-The head/tail shadow pointers of LMAC rings live in the rdp/wrp host
-memory, which qwz_hal_srng_init() clears only at attach and resume. On
-a re-init (ifconfig up after the qwz_core_deinit() at the end of
-qwz_attach()) they still hold the previous firmware run's values: the
-RX refill ring then looked almost full, got ~545 buffers instead of
-~4095, and RX starved under load. Zero them when the ring is set up,
-as Linux ath12k does in hw_init. The firmware does not use the ring
-before HTT ring setup.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
----
- sys/dev/ic/qwz.c | 23 ++++++++++++++++++++++-
- 1 file changed, 22 insertions(+), 1 deletion(-)
-
 diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
-index fc89f709f88857a37bcf8c09a28d1c4e72e23e1b..4b8ac5697e36a7bf78df45f1833db1977a855588 100644
 --- a/sys/dev/ic/qwz.c
 +++ b/sys/dev/ic/qwz.c
 @@ -20125,8 +20125,29 @@ qwz_hal_srng_setup(struct qwz_softc *sc, enum hal_ring_type type,

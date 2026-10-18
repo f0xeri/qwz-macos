@@ -1,0 +1,62 @@
+diff --git a/sys/dev/pci/if_qwz_pci.c b/sys/dev/pci/if_qwz_pci.c
+--- a/sys/dev/pci/if_qwz_pci.c
++++ b/sys/dev/pci/if_qwz_pci.c
+@@ -1439,6 +1439,16 @@ qwz_pcic_ext_irq_enable(struct qwz_softc *sc)
+ void
+ qwz_pcic_ce_irq_enable(struct qwz_softc *sc, uint16_t ce_id)
+ {
++#ifdef QWZMAC
++	/*
++	 * QWZMAC: qwz_ce_intr() skips copy engines whose bit is not set in
++	 * msi_ce_irqmask in one-MSI mode too, but the early return below
++	 * never sets it. With one MSI vector (all macOS gives: no
++	 * multi-message MSI in IOPCIFamily, no MSI-X on the chip) every CE
++	 * interrupt was then ignored, and the HTT service connect timed out.
++	 */
++	sc->msi_ce_irqmask |= (1U << ce_id);
++#endif
+ 	/* In case of one MSI vector, we handle irq enable/disable in a
+ 	 * uniform way since we only have one irq
+ 	 */
+@@ -1452,6 +1462,9 @@ qwz_pcic_ce_irq_enable(struct qwz_softc *sc, uint16_t ce_id)
+ void
+ qwz_pcic_ce_irq_disable(struct qwz_softc *sc, uint16_t ce_id)
+ {
++#ifdef QWZMAC /* QWZMAC: qwz_ce_intr() checks the mask in one-MSI mode too */
++	sc->msi_ce_irqmask &= ~(1U << ce_id);
++#endif
+ 	/* In case of one MSI vector, we handle irq enable/disable in a
+ 	 * uniform way since we only have one irq
+ 	 */
+@@ -3562,11 +3575,13 @@ qwz_rddm_task(void *arg)
+ 	int i, timeout;
+ 	const uint32_t msecs = 2000, retries = 1000;
+ 	uint8_t *rddm;
++#ifndef QWZMAC /* QWZMAC: a kext has no file system to write to; log the dump */
+ 	struct nameidata nd;
+ 	struct vnode *vp = NULL;
+ 	struct iovec iov[3];
+ 	struct uio uio;
+ 	char path[PATH_MAX];
++#endif
+ 	int error = 0;
+ 
+ 	if (psc->rddm_data == NULL) {
+@@ -3598,6 +3613,9 @@ qwz_rddm_task(void *arg)
+ 	}
+ 	DPRINTF("\n");
+ 
++#ifdef QWZMAC /* QWZMAC: a kext has no file system to write to; log the dump */
++	qwzmac_rddm_report(rddm, len);
++#else
+ 	DPRINTF("%s: sleeping for 30 seconds to allow userland to boot\n", __func__);
+ 	tsleep_nsec(&psc->rddm_data, 0, "qwzrddm", SEC_TO_NSEC(30));
+ 
+@@ -3639,6 +3657,7 @@ qwz_rddm_task(void *arg)
+ 	if (error)
+ 		DPRINTF("%s: vn_close: error %d\n", __func__, error);
+ 	#endif
++#endif /* QWZMAC */
+ done:
+ 	qwz_dmamem_free(sc->sc_dmat, psc->rddm_data);
+ 	qwz_dmamem_free(sc->sc_dmat, psc->rddm_vec);
