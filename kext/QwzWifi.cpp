@@ -3,8 +3,10 @@
  *
  * Stage 1: run qwz's attach unchanged (compat/autoconf.c) up to "firmware
  * ready" and the MAC address.
- * Stage 2: bring the interface up in scan-only mode; net80211 logs the
- * networks it finds. No macOS network interface is published yet.
+ * Stage 2: bring the interface up; net80211 logs the networks it finds.
+ * Stage 3: join the configured network (WPA2-PSK) and appear to macOS as
+ * an Ethernet interface (itlwm style): Ethernet frames are copied between
+ * macOS mbufs and OpenBSD mbufs in compat/autoconf.c.
  *
  * Boot-args:
  *   -qwzon     required, otherwise the driver does not attach at all
@@ -12,13 +14,25 @@
  *   qwzdebug=N qwz debug mask (QWZ_D_* in qwzvar.h), default 0 (errors only).
  *              0x7 = MISC|MHI|QMI; slows bring-up, qwz's 1 s QMI timeouts may fire
  *
+ * The network comes from the "QwzNetwork" dictionary (SSID, Password) in
+ * the personality, which scripts/build.sh copies from config/wifi.plist.
+ * Without it the driver only scans.
+ *
  * SPDX-License-Identifier: GPL-2.0-only (qwz parts: ISC)
  */
 #include <IOKit/IOService.h>
 #include <IOKit/IOLib.h>
-#include <IOKit/pci/IOPCIDevice.h>
+#include <IOKit/IOLocks.h>
+#include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOMessage.h>
+#include <IOKit/pci/IOPCIDevice.h>
 #include <IOKit/pwr_mgt/RootDomain.h>
+#include <IOKit/network/IOEthernetController.h>
+#include <IOKit/network/IOEthernetInterface.h>
+#include <IOKit/network/IONetworkMedium.h>
+#include <IOKit/network/IOOutputQueue.h>
+#include <kern/thread_call.h>
+#include <sys/kpi_mbuf.h>
 #include <pexpert/pexpert.h>
 
 #include "os_bridge.h"
@@ -27,28 +41,61 @@
 
 #define QLOG(fmt, ...) qwzmac_log("QwzWifi: " fmt "\n", ##__VA_ARGS__)
 
+/* 802.11 MTU (2304) plus the Ethernet header, as in compat/autoconf.c. */
+#define QWZ_FRAME_MAX	(2304 + 14)
+
 extern "C" uint32_t qwz_debug;	/* qwz/qwz.c, built with QWZ_DEBUG */
 
-class QwzWifi : public IOService {
+class QwzWifi : public IOEthernetController {
 	OSDeclareDefaultStructors(QwzWifi)
 public:
 	IOService *probe(IOService *provider, SInt32 *score) override;
 	bool start(IOService *provider) override;
 	void stop(IOService *provider) override;
 
+	bool createWorkLoop() override;
+	IOWorkLoop *getWorkLoop() const override;
+	IOReturn enable(IONetworkInterface *netif) override;
+	IOReturn disable(IONetworkInterface *netif) override;
+	IOReturn getHardwareAddress(IOEthernetAddress *addr) override;
+	UInt32 outputPacket(mbuf_t m, void *param) override;
+	IOReturn setPromiscuousMode(bool active) override;
+	IOReturn setMulticastMode(bool active) override;
+	IOReturn setMulticastList(IOEthernetAddress *addrs, UInt32 count) override;
+	IOReturn selectMedium(const IONetworkMedium *medium) override;
+	const OSString *newVendorString() const override;
+	const OSString *newModelString() const override;
+
 private:
 	void logDevice(IOPCIDevice *pci);
+	bool readNetwork(qwzmac_network *net);
+	bool createMedium();
 	static IOReturn powerMessage(void *target, void *refCon,
 	    UInt32 messageType, IOService *provider, void *arg,
 	    vm_size_t argSize);
+	static void netReady(void *cookie, const uint8_t mac[6]);
+	static void netInput(void *cookie, const void *frame, size_t len);
+	static void netLink(void *cookie, int up, uint64_t baudrate);
+	static void linkTc(thread_call_param_t p0, thread_call_param_t p1);
 
 	IOPCIDevice	*fPci;
 	void		*fQwz;
 	bool		 fOsInit;
 	IONotifier	*fPowerNotifier;
+	IOWorkLoop	*fWorkLoop;
+
+	IOLock		*fIfLock;	/* fNetIf vs. stop() */
+	IOEthernetInterface *fNetIf;
+	bool		 fStopping;
+	IONetworkMedium	*fMedium;	/* retained */
+	uint8_t		 fMac[6];
+
+	thread_call_t	 fLinkTc;	/* setLinkStatus() outside the spl lock */
+	volatile int	 fLinkUp;
+	volatile uint64_t fLinkSpeed;
 };
 
-OSDefineMetaClassAndStructors(QwzWifi, IOService)
+OSDefineMetaClassAndStructors(QwzWifi, IOEthernetController)
 
 IOService *
 QwzWifi::probe(IOService *provider, SInt32 *score)
@@ -59,7 +106,7 @@ QwzWifi::probe(IOService *provider, SInt32 *score)
 		QLOG("boot-arg -qwzon not set, not attaching");
 		return nullptr;
 	}
-	return IOService::probe(provider, score);
+	return IOEthernetController::probe(provider, score);
 }
 
 /* Stage 0 diagnostics: config space reads only. */
@@ -107,9 +154,80 @@ QwzWifi::logDevice(IOPCIDevice *pci)
 	}
 }
 
+/*
+ * The network to join, from the personality (config/wifi.plist at build
+ * time). The property is removed right away so the password does not
+ * show up in ioreg; it is never logged.
+ */
+bool
+QwzWifi::readNetwork(qwzmac_network *net)
+{
+	OSDictionary *d = OSDynamicCast(OSDictionary, getProperty("QwzNetwork"));
+	OSString *ssid, *pass;
+	bool ok = false;
+
+	bzero(net, sizeof(*net));
+	if (d == nullptr) {
+		QLOG("no QwzNetwork in the config: scanning only");
+		return false;
+	}
+	ssid = OSDynamicCast(OSString, d->getObject("SSID"));
+	pass = OSDynamicCast(OSString, d->getObject("Password"));
+	if (ssid == nullptr || pass == nullptr) {
+		QLOG("QwzNetwork needs SSID and Password strings");
+	} else if (ssid->getLength() < 1 || ssid->getLength() >= sizeof(net->ssid) ||
+	    pass->getLength() >= sizeof(net->passphrase)) {
+		QLOG("QwzNetwork: SSID or Password too long");
+	} else {
+		strlcpy(net->ssid, ssid->getCStringNoCopy(), sizeof(net->ssid));
+		strlcpy(net->passphrase, pass->getCStringNoCopy(),
+		    sizeof(net->passphrase));
+		QLOG("network from config: \"%s\"", net->ssid);
+		ok = true;
+	}
+	removeProperty("QwzNetwork");
+	return ok;
+}
+
+bool
+QwzWifi::createMedium()
+{
+	OSDictionary *dict = OSDictionary::withCapacity(1);
+	bool ok;
+
+	if (dict == nullptr)
+		return false;
+	fMedium = IONetworkMedium::medium(kIOMediumEthernetAuto, 0);
+	if (fMedium == nullptr) {
+		dict->release();
+		return false;
+	}
+	IONetworkMedium::addMedium(dict, fMedium);
+	ok = publishMediumDictionary(dict);
+	dict->release();
+	if (ok)
+		ok = setCurrentMedium(fMedium) && setSelectedMedium(fMedium);
+	return ok;
+}
+
+bool
+QwzWifi::createWorkLoop()
+{
+	fWorkLoop = IOWorkLoop::workLoop();
+	return fWorkLoop != nullptr;
+}
+
+IOWorkLoop *
+QwzWifi::getWorkLoop() const
+{
+	return fWorkLoop;
+}
+
 bool
 QwzWifi::start(IOService *provider)
 {
+	qwzmac_network net;
+	qwzmac_netif_ops ops;
 	char tmp[16];
 	int error;
 
@@ -117,8 +235,15 @@ QwzWifi::start(IOService *provider)
 	fQwz = nullptr;
 	fOsInit = false;
 	fPowerNotifier = nullptr;
-
-	if (!IOService::start(provider))
+	fNetIf = nullptr;
+	fStopping = false;
+	fMedium = nullptr;
+	fLinkTc = nullptr;
+	fLinkUp = 0;
+	fLinkSpeed = 0;
+	bzero(fMac, sizeof(fMac));
+	fIfLock = IOLockAlloc();
+	if (fIfLock == nullptr)
 		return false;
 
 	IOPCIDevice *pci = OSDynamicCast(IOPCIDevice, provider);
@@ -127,15 +252,31 @@ QwzWifi::start(IOService *provider)
 		return false;
 	}
 	qwzmac_log_start(pci);
-	QLOG("start, version 0.0.1 (built " __DATE__ " " __TIME__ ")");
+	QLOG("start, version 0.0.3 (built " __DATE__ " " __TIME__ ")");
+
+	if (!IOEthernetController::start(provider)) {
+		QLOG("IOEthernetController::start failed");
+		qwzmac_log_stop();
+		return false;
+	}
 
 	logDevice(pci);
 
 	if (PE_parse_boot_argn("-qwzprobe", tmp, sizeof(tmp))) {
 		QLOG("-qwzprobe: stage 0 only, device left untouched");
 		qwzmac_log_publish();
-		registerService();
 		return true;
+	}
+
+	if (!createMedium()) {
+		QLOG("cannot publish the medium");
+		qwzmac_log_stop();
+		return false;
+	}
+	fLinkTc = thread_call_allocate(linkTc, this);
+	if (fLinkTc == nullptr) {
+		qwzmac_log_stop();
+		return false;
 	}
 
 	if (!pci->open(this)) {
@@ -162,8 +303,17 @@ QwzWifi::start(IOService *provider)
 	UInt32 mask = 0;
 	PE_parse_boot_argn("qwzdebug", &mask, sizeof(mask));
 	qwz_debug = mask;
+
+	bool have_net = readNetwork(&net);
+	bzero(&ops, sizeof(ops));
+	ops.cookie = this;
+	ops.ready = netReady;
+	ops.input = netInput;
+	ops.link = netLink;
+
 	QLOG("stage 1: attaching qwz (debug mask 0x%x)", (unsigned)mask);
-	error = qwzmac_qwz_attach(pci, &fQwz);
+	error = qwzmac_qwz_attach(pci, &ops, have_net ? &net : nullptr, &fQwz);
+	bzero(&net, sizeof(net));	/* compat wiped it too */
 	if (error) {
 		QLOG("qwz attach failed: %d", error);
 		qwzmac_os_fini();
@@ -175,8 +325,8 @@ QwzWifi::start(IOService *provider)
 	}
 
 	/*
-	 * From stage 2 on the chip is running and writes into host RAM.
-	 * At shutdown/restart turn its bus mastering off. A priority
+	 * At shutdown/restart power the chip down, as Linux ath12k does
+	 * (compat/autoconf.c, qwzmac_qwz_shutdown()). A priority
 	 * sleep/wake interest gets these messages without joining the power
 	 * plane (which would also make us handle sleep).
 	 */
@@ -184,7 +334,7 @@ QwzWifi::start(IOService *provider)
 	if (fPowerNotifier == nullptr)
 		QLOG("no shutdown notification, DMA stays on at restart");
 
-	registerService();
+	/* The network interface is published by netReady(), once the MAC is known. */
 	return true;
 }
 
@@ -197,7 +347,7 @@ QwzWifi::powerMessage(void *target, void *refCon, UInt32 messageType,
 	(void)refCon; (void)provider; (void)arg; (void)argSize;
 	if (messageType == kIOMessageSystemWillPowerOff ||
 	    messageType == kIOMessageSystemWillRestart) {
-		QLOG("system %s: stopping device DMA",
+		QLOG("system %s: powering the chip down",
 		    messageType == kIOMessageSystemWillRestart ?
 		    "restart" : "power off");
 		qwzmac_qwz_shutdown(me->fQwz);
@@ -206,17 +356,201 @@ QwzWifi::powerMessage(void *target, void *refCon, UInt32 messageType,
 	return kIOReturnSuccess;
 }
 
+/* Bring-up thread, no spl lock: firmware is up, publish the interface. */
+void
+QwzWifi::netReady(void *cookie, const uint8_t mac[6])
+{
+	QwzWifi *me = (QwzWifi *)cookie;
+	IOEthernetInterface *netif = nullptr;
+
+	IOLockLock(me->fIfLock);
+	if (me->fStopping || me->fNetIf != nullptr) {
+		IOLockUnlock(me->fIfLock);
+		return;
+	}
+	bcopy(mac, me->fMac, sizeof(me->fMac));
+	if (!me->attachInterface((IONetworkInterface **)&netif, true)) {
+		IOLockUnlock(me->fIfLock);
+		QLOG("cannot attach the network interface");
+		return;
+	}
+	me->fNetIf = netif;
+	IOLockUnlock(me->fIfLock);
+	me->setLinkStatus(kIONetworkLinkValid);
+	QLOG("network interface %s%u published", netif->getNamePrefix(),
+	    netif->getUnitNumber());
+}
+
+/* qwz context, spl lock held (serializes all calls). */
+void
+QwzWifi::netInput(void *cookie, const void *frame, size_t len)
+{
+	QwzWifi *me = (QwzWifi *)cookie;
+	IOEthernetInterface *netif = me->fNetIf;
+	mbuf_t m;
+
+	if (netif == nullptr || len == 0 || len > QWZ_FRAME_MAX)
+		return;
+	m = me->allocatePacket((UInt32)len);
+	if (m == nullptr)
+		return;
+	if (mbuf_copyback(m, 0, len, frame, MBUF_DONTWAIT) != 0) {
+		me->freePacket(m);
+		return;
+	}
+	netif->inputPacket(m, (UInt32)len);
+}
+
+/*
+ * qwz context, spl lock held. setLinkStatus() talks to the network stack,
+ * which may be calling outputPacket() and waiting for the spl lock, so
+ * defer it to a thread.
+ */
+void
+QwzWifi::netLink(void *cookie, int up, uint64_t baudrate)
+{
+	QwzWifi *me = (QwzWifi *)cookie;
+
+	me->fLinkSpeed = baudrate;
+	__atomic_store_n(&me->fLinkUp, up ? 1 : 0, __ATOMIC_SEQ_CST);
+	thread_call_enter(me->fLinkTc);
+}
+
+void
+QwzWifi::linkTc(thread_call_param_t p0, thread_call_param_t p1)
+{
+	QwzWifi *me = (QwzWifi *)p0;
+
+	(void)p1;
+	if (__atomic_load_n(&me->fLinkUp, __ATOMIC_SEQ_CST))
+		me->setLinkStatus(kIONetworkLinkValid | kIONetworkLinkActive,
+		    me->fMedium, me->fLinkSpeed);
+	else
+		me->setLinkStatus(kIONetworkLinkValid);
+}
+
+UInt32
+QwzWifi::outputPacket(mbuf_t m, void *param)
+{
+	uint8_t frame[QWZ_FRAME_MAX];
+	size_t len;
+	int error;
+
+	(void)param;
+	if (m == nullptr)
+		return kIOReturnOutputDropped;
+	len = mbuf_pkthdr_len(m);
+	if (len < 14 || len > sizeof(frame) ||
+	    mbuf_copydata(m, 0, len, frame) != 0) {
+		freePacket(m);
+		return kIOReturnOutputDropped;
+	}
+	freePacket(m);
+	error = qwzmac_qwz_output(fQwz, frame, len);
+	return error == 0 ? kIOReturnOutputSuccess : kIOReturnOutputDropped;
+}
+
+/*
+ * The interface was brought up/down by macOS. The radio follows its own
+ * life: it joins the network at boot and stays associated (stage 4 will
+ * tie it to enable/disable and to sleep).
+ */
+IOReturn
+QwzWifi::enable(IONetworkInterface *netif)
+{
+	(void)netif;
+	QLOG("interface enabled by macOS");
+	return kIOReturnSuccess;
+}
+
+IOReturn
+QwzWifi::disable(IONetworkInterface *netif)
+{
+	(void)netif;
+	QLOG("interface disabled by macOS");
+	return kIOReturnSuccess;
+}
+
+IOReturn
+QwzWifi::getHardwareAddress(IOEthernetAddress *addr)
+{
+	bcopy(fMac, addr->bytes, sizeof(fMac));
+	return kIOReturnSuccess;
+}
+
+/* qwz has no receive filter to program: it passes all multicast. */
+IOReturn
+QwzWifi::setPromiscuousMode(bool active)
+{
+	(void)active;
+	return kIOReturnSuccess;
+}
+
+IOReturn
+QwzWifi::setMulticastMode(bool active)
+{
+	(void)active;
+	return kIOReturnSuccess;
+}
+
+IOReturn
+QwzWifi::setMulticastList(IOEthernetAddress *addrs, UInt32 count)
+{
+	(void)addrs; (void)count;
+	return kIOReturnSuccess;
+}
+
+IOReturn
+QwzWifi::selectMedium(const IONetworkMedium *medium)
+{
+	setSelectedMedium(medium);
+	return kIOReturnSuccess;
+}
+
+const OSString *
+QwzWifi::newVendorString() const
+{
+	return OSString::withCString("Qualcomm");
+}
+
+const OSString *
+QwzWifi::newModelString() const
+{
+	return OSString::withCString("WCN7850 Wi-Fi (qwz)");
+}
+
 void
 QwzWifi::stop(IOService *provider)
 {
+	IOEthernetInterface *netif;
+
 	QLOG("stop");
 	if (fPowerNotifier != nullptr) {
 		fPowerNotifier->remove();
 		fPowerNotifier = nullptr;
 	}
+	/* No more netInput()/netLink(), then no more outputPacket(). */
+	qwzmac_qwz_disconnect(fQwz);
+	IOLockLock(fIfLock);
+	fStopping = true;
+	netif = fNetIf;
+	fNetIf = nullptr;
+	IOLockUnlock(fIfLock);
+	if (netif != nullptr) {
+		detachInterface(netif, true);
+		netif->release();
+	}
 	if (fQwz != nullptr) {
 		qwzmac_qwz_detach(fQwz);
 		fQwz = nullptr;
+	}
+	if (fLinkTc != nullptr) {
+		while (thread_call_isactive(fLinkTc)) {
+			thread_call_cancel(fLinkTc);
+			IOSleep(5);
+		}
+		thread_call_free(fLinkTc);
+		fLinkTc = nullptr;
 	}
 	if (fOsInit) {
 		qwzmac_os_fini();
@@ -226,6 +560,16 @@ QwzWifi::stop(IOService *provider)
 		fPci->close(this);
 		fPci = nullptr;
 	}
+	if (fMedium != nullptr) {
+		fMedium->release();
+		fMedium = nullptr;
+	}
 	qwzmac_log_stop();
-	IOService::stop(provider);
+	IOEthernetController::stop(provider);
+	if (fWorkLoop != nullptr) {
+		fWorkLoop->release();
+		fWorkLoop = nullptr;
+	}
+	IOLockFree(fIfLock);
+	fIfLock = nullptr;
 }

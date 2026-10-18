@@ -20125,8 +20125,29 @@ qwz_hal_srng_setup(struct qwz_softc *sc, enum hal_ring_type type,
 		}
 	}
 
-	if (srng_config->mac_type != ATH12K_HAL_SRNG_UMAC)
+	if (srng_config->mac_type != ATH12K_HAL_SRNG_UMAC) {
+#ifdef QWZMAC
+		/*
+		 * QWZMAC: the shadow pointers of LMAC rings live in the
+		 * rdp/wrp memory, which qwz_hal_srng_init() clears only at
+		 * attach and resume. On a re-init (ifconfig up after the
+		 * qwz_core_deinit() at the end of qwz_attach()) they still
+		 * hold the previous firmware run's values: the RX refill
+		 * ring then looked almost full and got ~545 buffers instead
+		 * of ~4095, and RX starved under load. Linux zeroes these in
+		 * hw_init and reallocates the memory on restart. The
+		 * firmware does not use the ring before HTT ring setup.
+		 */
+		if (srng->ring_dir == HAL_SRNG_DIR_SRC) {
+			*srng->u.src_ring.tp_addr = 0;
+			*srng->u.src_ring.hp_addr = 0;
+		} else {
+			*srng->u.dst_ring.hp_addr = 0;
+			*srng->u.dst_ring.tp_addr = 0;
+		}
+#endif
 		return ring_id;
+	}
 
 	qwz_hal_srng_hw_init(sc, srng);
 

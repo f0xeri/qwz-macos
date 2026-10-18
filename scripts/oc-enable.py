@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Add/enable or disable QwzWifi in OpenCore config.plist (with backup).
 usage: oc-enable.py on|probe|off [/path/to/EFI/OC]
-  on     kext enabled, boot-arg -qwzon            (stage 1: firmware bring-up)
+  on     kext enabled, boot-arg -qwzon            (normal run)
   probe  kext enabled, boot-args -qwzon -qwzprobe (stage 0: read-only probe)
   off    kext disabled, no QwzWifi boot-args"""
 import plistlib, shutil, sys, time, os

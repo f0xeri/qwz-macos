@@ -3,3 +3,4 @@ third_party/
 firmware/
 *.o
 .DS_Store
+config/wifi.plist

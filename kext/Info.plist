@@ -8,8 +8,8 @@
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>CFBundleName</key><string>QwzWifi</string>
 	<key>CFBundlePackageType</key><string>KEXT</string>
-	<key>CFBundleShortVersionString</key><string>0.0.1</string>
-	<key>CFBundleVersion</key><string>0.0.1</string>
+	<key>CFBundleShortVersionString</key><string>0.0.3</string>
+	<key>CFBundleVersion</key><string>0.0.3</string>
 	<key>IOKitPersonalities</key>
 	<dict>
 		<key>QwzWifi</key>
@@ -23,6 +23,7 @@
 	</dict>
 	<key>OSBundleLibraries</key>
 	<dict>
+		<key>com.apple.iokit.IONetworkingFamily</key><string>1.5.0</string>
 		<key>com.apple.iokit.IOPCIFamily</key><string>2.9</string>
 		<key>com.apple.kpi.bsd</key><string>19.0.0</string>
 		<key>com.apple.kpi.iokit</key><string>19.0.0</string>

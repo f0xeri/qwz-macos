@@ -111,7 +111,9 @@ if_up(struct ifnet *ifp)
 void
 if_down(struct ifnet *ifp)
 {
+	/* As OpenBSD's if_down(): clear IFF_UP, drop queued output. */
 	ifp->if_flags &= ~IFF_UP;
+	ifq_purge(&ifp->if_snd);
 	timeout_del(&ifp->if_slowtimo);
 }
 

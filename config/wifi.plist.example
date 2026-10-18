@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The Wi-Fi network QwzWifi joins (WPA2-PSK). Copy to config/wifi.plist
+  (gitignored) and fill in. scripts/build.sh copies the QwzNetwork entry
+  into the kext's Info.plist. It can also be edited there directly on the
+  boot stick: EFI/OC/Kexts/QwzWifi.kext/Contents/Info.plist, key
+  IOKitPersonalities > QwzWifi > QwzNetwork.
+  Exactly this SSID is joined. Without the file the driver only scans.
+-->
+<plist version="1.0">
+<dict>
+	<key>QwzNetwork</key>
+	<dict>
+		<key>SSID</key><string>MyNetwork</string>
+		<key>Password</key><string>wpa2-passphrase</string>
+	</dict>
+</dict>
+</plist>

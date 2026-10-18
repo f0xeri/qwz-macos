@@ -19,7 +19,8 @@ OUT=build; mkdir -p $OUT/obj
 ARCH=(-arch x86_64 -mmacosx-version-min=11.0)
 COMMON=($ARCH -mkernel -fno-builtin -fno-common -O2 -Wall
         -isysroot "$SDK" -I"$KH" -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT)
-CXXFLAGS=(-std=gnu++17 -fapple-kext -fno-rtti -fno-exceptions)
+# IOPCIDevice/IONetworking/mbuf KPIs are marked deprecated in favour of DriverKit; still public.
+CXXFLAGS=(-std=gnu++17 -fapple-kext -fno-rtti -fno-exceptions -Wno-deprecated-declarations)
 BSDFLAGS=($ARCH -x c -std=gnu11 -mkernel -ffreestanding -fno-builtin -fno-common -O2
           -nostdinc -isystem "$RD/include" -D_KERNEL -DQWZMAC -DQWZ_DEBUG -I compat/include -I .
           -Wall -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable
@@ -37,6 +38,14 @@ clang++ $ARCH -isysroot "$SDK" -nostdlib -Xlinker -kext \
         "${OBJS[@]}" -L"$SDK/usr/lib" -lkmodc++ -lkmod -o $OUT/QwzWifi.bin
 rm -rf $OUT/QwzWifi.kext; mkdir -p $OUT/QwzWifi.kext/Contents/MacOS
 cp kext/Info.plist $OUT/QwzWifi.kext/Contents/Info.plist
+# The network to join (config/wifi.plist, gitignored; see wifi.plist.example).
+if [[ -f config/wifi.plist ]]; then
+  plutil -insert IOKitPersonalities.QwzWifi.QwzNetwork -xml \
+    "$(plutil -extract QwzNetwork xml1 -o - config/wifi.plist)" $OUT/QwzWifi.kext/Contents/Info.plist
+  echo "network: $(plutil -extract QwzNetwork.SSID raw -o - config/wifi.plist) (from config/wifi.plist)"
+else
+  echo "network: none (no config/wifi.plist), the driver will only scan"
+fi
 cp $OUT/QwzWifi.bin $OUT/QwzWifi.kext/Contents/MacOS/QwzWifi
 plutil -lint $OUT/QwzWifi.kext/Contents/Info.plist
 # Every undefined symbol must be a kernel export; anything from the OpenBSD

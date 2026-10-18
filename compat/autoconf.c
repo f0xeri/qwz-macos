@@ -24,6 +24,7 @@
 
 #include <net80211/ieee80211_var.h>
 #include <net80211/ieee80211_radiotap.h>
+#include <net80211/ieee80211_ioctl.h>
 
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pcivar.h>
@@ -40,11 +41,33 @@
 #include <dev/ic/qwzvar.h>
 
 #include <qwzmac/attach.h>
+#include <qwzmac/pbkdf2.h>
 
 extern const struct cfattach qwz_pci_ca;
 
 /* qwz can only reach the lower 4 GB (qwz_dmamem_alloc: 0..0xffffffff). */
 static struct bus_dma_tag qwz_dmat32 = { 0, 0xffffffffUL };
+
+/* Largest frame either way: 802.11 MTU (2304) plus the Ethernet header. */
+#define QWZMAC_FRAME_MAX	(IEEE80211_MAX_LEN + ETHER_HDR_LEN)
+
+struct qwzmac_dev {
+	struct device		*dev;
+	pci_chipset_tag_t	 pc;
+	int			 attached;	/* ca_attach got to the end */
+	struct qwzmac_netif_ops	 ops;		/* zeroed before detach */
+
+	/* The network to join, PSK already derived. */
+	int			 have_net;
+	uint8_t			 ssid[IEEE80211_NWID_LEN];
+	uint8_t			 ssid_len;
+	uint8_t			 psk[32];
+
+	uint8_t			 rxbuf[QWZMAC_FRAME_MAX]; /* spl lock */
+};
+
+/* There is one device; the mountroot hook only gets the softc. */
+static struct qwzmac_dev *qwzmac_the_dev;
 
 /* config_mountroot(9): run the hook in a thread and remember its state. */
 static int mountroot_pending;	/* hooks scheduled but not finished */
@@ -73,25 +96,137 @@ mountroot_report(struct device *dev)
 	    n, bytes / 1024);
 }
 
+/* ifnet hooks (compat/if.c): frames and link state go to the kext. */
+static void
+qwzmac_if_input(struct ifnet *ifp, struct mbuf *m)
+{
+	struct qwzmac_dev *qd = ifp->if_qwzmac_cookie;
+	int len = m->m_pkthdr.len;
+
+	qwzmac_spl_lock();
+	if (qd->ops.input == NULL || len < ETHER_HDR_LEN ||
+	    len > (int)sizeof(qd->rxbuf)) {
+		ifp->if_ierrors++;
+		qwzmac_spl_unlock();
+		m_freem(m);
+		return;
+	}
+	m_copydata(m, 0, len, qd->rxbuf);
+	m_freem(m);
+	qd->ops.input(qd->ops.cookie, qd->rxbuf, len);
+	qwzmac_spl_unlock();
+}
+
+static void
+qwzmac_if_link_state(struct ifnet *ifp)
+{
+	struct qwzmac_dev *qd = ifp->if_qwzmac_cookie;
+	struct ieee80211com *ic = (struct ieee80211com *)ifp;
+	int up = ifp->if_link_state >= LINK_STATE_UP;
+
+	if (up && ic->ic_bss != NULL) {
+		char ssid[IEEE80211_NWID_LEN + 1];
+
+		memcpy(ssid, ic->ic_bss->ni_essid, ic->ic_bss->ni_esslen);
+		ssid[ic->ic_bss->ni_esslen] = '\0';
+		printf("QwzWifi: stage 3: link up: \"%s\" bssid %s channel %u, "
+		    "%llu Mbit/s\n", ssid, ether_sprintf(ic->ic_bss->ni_bssid),
+		    ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan),
+		    (unsigned long long)(ifp->if_baudrate / 1000000));
+	} else
+		printf("QwzWifi: link down\n");
+
+	qwzmac_spl_lock();
+	if (qd->ops.link != NULL)
+		qd->ops.link(qd->ops.cookie, up, ifp->if_baudrate);
+	qwzmac_spl_unlock();
+}
+
+static int
+qwzmac_ioctl(struct ifnet *ifp, u_long cmd, void *data)
+{
+	int error = ifp->if_ioctl(ifp, cmd, (caddr_t)data);
+
+	/* Interface still down: settings apply when it comes up. */
+	return error == ENETRESET ? 0 : error;
+}
+
 /*
- * Stage 2: scan only. This is "ifconfig qwz0 debug bssid <none> up":
- *  - IFF_DEBUG makes net80211's ieee80211_match_bss() print every network
- *    found (bssid, channel, RSSI, SSID) after each scan;
- *  - a desired BSSID that no AP has makes every candidate fail, so
- *    net80211 never joins anything and keeps rescanning (marked '!').
- * Called from the bring-up thread without the spl lock, like an ioctl.
+ * "ifconfig qwz0 nwid <ssid> wpakey <passphrase>": join exactly this SSID
+ * with WPA2-PSK (CCMP). Setting nwid also turns auto-join off.
+ */
+static int
+qwzmac_set_network(struct qwzmac_dev *qd, struct ifnet *ifp)
+{
+	struct ieee80211_nwid nwid;
+	struct ieee80211_wpaparams wpa;
+	struct ieee80211_wpapsk psk;
+	struct ifreq ifr;
+	int error;
+
+	memset(&nwid, 0, sizeof(nwid));
+	nwid.i_len = qd->ssid_len;
+	memcpy(nwid.i_nwid, qd->ssid, qd->ssid_len);
+	memset(&ifr, 0, sizeof(ifr));
+	strlcpy(ifr.ifr_name, ifp->if_xname, sizeof(ifr.ifr_name));
+	ifr.ifr_data = (caddr_t)&nwid;
+	if ((error = qwzmac_ioctl(ifp, SIOCS80211NWID, &ifr)) != 0)
+		return error;
+
+	memset(&wpa, 0, sizeof(wpa));
+	strlcpy(wpa.i_name, ifp->if_xname, sizeof(wpa.i_name));
+	wpa.i_enabled = 1;
+	wpa.i_protos = IEEE80211_WPA_PROTO_WPA2;
+	wpa.i_akms = IEEE80211_WPA_AKM_PSK;
+	wpa.i_ciphers = IEEE80211_WPA_CIPHER_CCMP;
+	wpa.i_groupcipher = IEEE80211_WPA_CIPHER_CCMP;
+	if ((error = qwzmac_ioctl(ifp, SIOCS80211WPAPARMS, &wpa)) != 0)
+		return error;
+
+	memset(&psk, 0, sizeof(psk));
+	strlcpy(psk.i_name, ifp->if_xname, sizeof(psk.i_name));
+	psk.i_enabled = 1;
+	memcpy(psk.i_psk, qd->psk, sizeof(psk.i_psk));
+	error = qwzmac_ioctl(ifp, SIOCS80211WPAPSK, &psk);
+	explicit_bzero(&psk, sizeof(psk));
+	return error;
+}
+
+/*
+ * After stage 1: configure the network and bring the interface up, like
+ * ifconfig would. IFF_DEBUG makes net80211 log the scan results, the
+ * association and the 4-way handshake.
+ * Without a network this is stage 2, scan only: a desired BSSID no AP has
+ * makes every candidate fail, so net80211 keeps rescanning and joins
+ * nothing. Called from the bring-up thread without the spl lock.
  */
 static void
-stage2_scan(struct qwz_softc *sc)
+qwzmac_up(struct qwzmac_dev *qd)
 {
+	struct qwz_softc *sc = (struct qwz_softc *)qd->dev;
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct ifnet *ifp = &ic->ic_if;
 	struct ifreq ifr;
 	int error;
 
-	memset(ic->ic_des_bssid, 0, IEEE80211_ADDR_LEN);
-	ic->ic_flags |= IEEE80211_F_DESBSSID;
 	ifp->if_flags |= IFF_DEBUG;
+	if (qd->have_net) {
+		char ssid[IEEE80211_NWID_LEN + 1];
+
+		error = qwzmac_set_network(qd, ifp);
+		explicit_bzero(qd->psk, sizeof(qd->psk));
+		if (error) {
+			printf("QwzWifi: stage 3: network setup failed: %d\n",
+			    error);
+			return;
+		}
+		memcpy(ssid, qd->ssid, qd->ssid_len);
+		ssid[qd->ssid_len] = '\0';
+		printf("QwzWifi: stage 3: joining \"%s\" (WPA2-PSK)\n", ssid);
+	} else {
+		memset(ic->ic_des_bssid, 0, IEEE80211_ADDR_LEN);
+		ic->ic_flags |= IEEE80211_F_DESBSSID;
+	}
 
 	if_up(ifp);
 	memset(&ifr, 0, sizeof(ifr));
@@ -99,8 +234,8 @@ stage2_scan(struct qwz_softc *sc)
 	ifr.ifr_flags = ifp->if_flags;
 	error = ifp->if_ioctl(ifp, SIOCSIFFLAGS, (caddr_t)&ifr);
 	if (error)
-		printf("QwzWifi: stage 2: interface up failed: %d\n", error);
-	else
+		printf("QwzWifi: interface up failed: %d\n", error);
+	else if (!qd->have_net)
 		printf("QwzWifi: stage 2: interface up, scanning "
 		    "(scan only, networks are listed after each scan)\n");
 }
@@ -110,6 +245,7 @@ mountroot_thread(void *arg)
 {
 	struct mountroot_hook *h = arg;
 	struct qwz_softc *sc = (struct qwz_softc *)h->dev;
+	struct qwzmac_dev *qd = qwzmac_the_dev;
 	uint64_t t0 = getnsecuptime();
 
 	printf("QwzWifi: firmware bring-up thread started\n");
@@ -117,8 +253,11 @@ mountroot_thread(void *arg)
 	printf("QwzWifi: bring-up took %llu ms\n",
 	    (unsigned long long)((getnsecuptime() - t0) / 1000000));
 	mountroot_report(h->dev);
-	if (sc->attached)
-		stage2_scan(sc);
+	if (sc->attached && qd != NULL) {
+		if (qd->ops.ready != NULL)
+			qd->ops.ready(qd->ops.cookie, sc->sc_ic.ic_myaddr);
+		qwzmac_up(qd);
+	}
 
 	qwzmac_spl_lock();
 	mountroot_pending--;
@@ -176,18 +315,43 @@ pci_bus_master_off(pci_chipset_tag_t pc)
 	}
 }
 
-struct qwzmac_dev {
-	struct device		*dev;
-	pci_chipset_tag_t	 pc;
-	int			 attached;	/* ca_attach got to the end */
-};
+/* Validates the network and derives the PSK (what ifconfig does). */
+static int
+qwzmac_take_network(struct qwzmac_dev *qd, struct qwzmac_network *net)
+{
+	size_t slen, plen;
+	int error = 0;
+
+	slen = strnlen(net->ssid, sizeof(net->ssid));
+	plen = strnlen(net->passphrase, sizeof(net->passphrase));
+	if (slen == 0 || slen > IEEE80211_NWID_LEN) {
+		printf("QwzWifi: config: SSID must be 1..32 bytes\n");
+		error = EINVAL;
+	} else if (plen < 8 || plen > 63) {
+		printf("QwzWifi: config: WPA2 passphrase must be 8..63 "
+		    "characters\n");
+		error = EINVAL;
+	} else if (pkcs5_pbkdf2(net->passphrase, plen,
+	    (const uint8_t *)net->ssid, slen, qd->psk, sizeof(qd->psk),
+	    4096) != 0) {
+		error = EINVAL;
+	} else {
+		memcpy(qd->ssid, net->ssid, slen);
+		qd->ssid_len = slen;
+		qd->have_net = 1;
+	}
+	explicit_bzero(net->passphrase, sizeof(net->passphrase));
+	return error;
+}
 
 int
-qwzmac_qwz_attach(void *pcidev, void **devp)
+qwzmac_qwz_attach(void *pcidev, const struct qwzmac_netif_ops *ops,
+    struct qwzmac_network *net, void **devp)
 {
 	struct pci_attach_args pa;
 	struct qwzmac_dev *qd;
 	struct device *dev;
+	struct ifnet *ifp;
 	int scheduled;
 
 	memset(&pa, 0, sizeof(pa));
@@ -201,18 +365,30 @@ qwzmac_qwz_attach(void *pcidev, void **devp)
 
 	if (!qwz_pci_ca.ca_match(NULL, NULL, &pa)) {
 		printf("QwzWifi: qwz does not match id 0x%08x\n", pa.pa_id);
+		if (net != NULL)
+			explicit_bzero(net, sizeof(*net));
 		return ENODEV;
 	}
 
-	if (qwzmac_taskq_init() != 0)
-		return ENOMEM;
-
 	qd = malloc(sizeof(*qd), M_DEVBUF, M_WAITOK | M_CANFAIL | M_ZERO);
+	if (qd == NULL) {
+		if (net != NULL)
+			explicit_bzero(net, sizeof(*net));
+		return ENOMEM;
+	}
+	if (net != NULL && qwzmac_take_network(qd, net) != 0)
+		printf("QwzWifi: no usable network in the config, "
+		    "scanning only\n");
+
+	if (qwzmac_taskq_init() != 0) {
+		free(qd, M_DEVBUF, sizeof(*qd));
+		return ENOMEM;
+	}
 	dev = malloc(qwz_pci_ca.ca_devsize, M_DEVBUF,
 	    M_WAITOK | M_CANFAIL | M_ZERO);
-	if (qd == NULL || dev == NULL) {
+	if (dev == NULL) {
+		explicit_bzero(qd, sizeof(*qd));
 		free(qd, M_DEVBUF, sizeof(*qd));
-		free(dev, M_DEVBUF, qwz_pci_ca.ca_devsize);
 		qwzmac_taskq_fini();
 		return ENOMEM;
 	}
@@ -221,16 +397,23 @@ qwzmac_qwz_attach(void *pcidev, void **devp)
 	strlcpy(dev->dv_xname, "qwz0", sizeof(dev->dv_xname));
 	qd->dev = dev;
 	qd->pc = pcidev;
+	qd->ops = *ops;
+	qwzmac_the_dev = qd;
 
 	printf("qwz0 at pci: attaching (softc %zu bytes)\n",
 	    qwz_pci_ca.ca_devsize);
 	scheduled = mountroot_scheduled;
 	/*
 	 * OpenBSD attaches devices while "cold", with interrupts blocked.
-	 * Holding the spl lock keeps qwz_pci_intr() out until attach is done.
+	 * Holding the spl lock keeps qwz_pci_intr() out until attach is done
+	 * and the hooks are set.
 	 */
 	qwzmac_spl_lock();
 	qwz_pci_ca.ca_attach(NULL, dev, &pa);
+	ifp = &((struct qwz_softc *)dev)->sc_ic.ic_if;
+	ifp->if_qwzmac_cookie = qd;
+	ifp->if_qwzmac_input = qwzmac_if_input;
+	ifp->if_qwzmac_link_state = qwzmac_if_link_state;
 	qwzmac_spl_unlock();
 	/* qwz_pci_attach() schedules the hook only when it fully succeeded. */
 	qd->attached = (mountroot_scheduled != scheduled);
@@ -241,6 +424,65 @@ qwzmac_qwz_attach(void *pcidev, void **devp)
 	return 0;
 }
 
+int
+qwzmac_qwz_output(void *p, const void *frame, size_t len)
+{
+	struct qwzmac_dev *qd = p;
+	struct qwz_softc *sc;
+	struct ieee80211com *ic;
+	struct ifnet *ifp;
+	struct mbuf *m;
+	int error;
+
+	if (qd == NULL || !qd->attached)
+		return ENXIO;
+	if (len < ETHER_HDR_LEN || len > QWZMAC_FRAME_MAX)
+		return EMSGSIZE;
+	sc = (struct qwz_softc *)qd->dev;
+	ic = &sc->sc_ic;
+	ifp = &ic->ic_if;
+
+	qwzmac_spl_lock();
+	if (ic->ic_state != IEEE80211_S_RUN ||
+	    (ifp->if_flags & (IFF_UP | IFF_RUNNING)) != (IFF_UP | IFF_RUNNING) ||
+	    !LINK_STATE_IS_UP(ifp->if_link_state)) {
+		qwzmac_spl_unlock();
+		return ENETDOWN;
+	}
+	m = m_devget((char *)frame, len, 0);
+	if (m == NULL) {
+		ifp->if_oerrors++;
+		qwzmac_spl_unlock();
+		return ENOBUFS;
+	}
+	/* Ownership of m passes to if_enqueue() even when it fails. */
+	error = if_enqueue(ifp, m);
+	if (error)
+		ifp->if_oerrors++;
+	else
+		ifp->if_opackets++;
+	qwzmac_spl_unlock();
+	return error;
+}
+
+/*
+ * input() and link() run with the spl lock held, so clearing ops under it
+ * waits for a running one. ready() runs without it: mountroot_wait() in
+ * detach covers that one.
+ */
+void
+qwzmac_qwz_disconnect(void *p)
+{
+	struct qwzmac_dev *qd = p;
+
+	if (qd == NULL)
+		return;
+	qwzmac_spl_lock();
+	qd->ops.input = NULL;
+	qd->ops.link = NULL;
+	qwzmac_spl_unlock();
+}
+
 void
 qwzmac_qwz_detach(void *p)
 {
@@ -248,6 +490,11 @@ qwzmac_qwz_detach(void *p)
 
 	if (qd == NULL)
 		return;
+
+	/* No more calls into the kext, which is going away. */
+	qwzmac_spl_lock();
+	memset(&qd->ops, 0, sizeof(qd->ops));
+	qwzmac_spl_unlock();
 
 	mountroot_wait();
 
@@ -279,21 +526,68 @@ qwzmac_qwz_detach(void *p)
 		qwzmac_taskq_fini();
 	}
 
+	qwzmac_the_dev = NULL;
+	explicit_bzero(qd, sizeof(*qd));
 	free(qd, M_DEVBUF, sizeof(*qd));
 	printf("QwzWifi: qwz detached\n");
 }
 
 /*
- * System shutdown or restart: the chip may be scanning, i.e. writing into
- * host RAM. Stop it from mastering the bus so nothing it does can reach
- * memory the next boot stage reuses. No firmware teardown: it can block.
+ * System shutdown or restart: power the chip down, as Linux ath12k does in
+ * its PCI .shutdown hook (ath12k_pci_hw_group_power_down()). In qwz that is
+ * the suspend path, qwz_activate(DVACT_QUIESCE): qwz_stop(), then
+ * qwz_core_deinit(), which ends in qwz_pci_power_down() (MHI to M3, SoC
+ * reset). OpenBSD itself does not do this at reboot (its boot() only takes
+ * interfaces down), but here the module keeps standby power across reboot
+ * and S5, and a chip left running vanished from the bus (runs 7, 8, 12).
+ * QWZMAC glue: it runs in a thread with QWZMAC_SHUTDOWN_NSEC, so a hung
+ * chip cannot hang the macOS shutdown. Bus mastering goes off last.
  */
+#define QWZMAC_SHUTDOWN_NSEC	SEC_TO_NSEC(10)
+
+static int qwzmac_shutdown_done;
+
+static void
+qwzmac_shutdown_thread(void *arg)
+{
+	struct qwzmac_dev *qd = arg;
+
+	qwz_activate(qd->dev, DVACT_QUIESCE);
+
+	qwzmac_spl_lock();
+	qwzmac_shutdown_done = 1;
+	qwzmac_wakeup(&qwzmac_shutdown_done, 0);
+	qwzmac_spl_unlock();
+}
+
 void
 qwzmac_qwz_shutdown(void *p)
 {
 	struct qwzmac_dev *qd = p;
+	uint64_t deadline;
+	int done = 0;
 
-	if (qd == NULL)
+	if (qd == NULL || !qd->attached)
 		return;
+	/* No calls into the kext from here on. */
+	qwzmac_qwz_disconnect(qd);
+
+	qwzmac_shutdown_done = 0;
+	if (qwzmac_thread_start(qwzmac_shutdown_thread, qd) == 0) {
+		deadline = getnsecuptime() + QWZMAC_SHUTDOWN_NSEC;
+		qwzmac_spl_lock();
+		while (!qwzmac_shutdown_done) {
+			uint64_t now = getnsecuptime();
+
+			if (now >= deadline)
+				break;
+			qwzmac_sleep(&qwzmac_shutdown_done, deadline - now);
+		}
+		done = qwzmac_shutdown_done;
+		qwzmac_spl_unlock();
+	}
+	printf("QwzWifi: shutdown: chip %s\n", done ? "powered down" :
+	    "did not power down in time");
+	/* Last step: whatever state it is in, no more DMA into RAM. */
 	pci_bus_master_off(qd->pc);
 }

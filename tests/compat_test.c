@@ -15,12 +15,15 @@
 #include <machine/bus.h>
 #include <net/if.h>
 #include <netinet/if_ether.h>
+#include <qwzmac/pbkdf2.h>
 
 extern int test_dma_fake_high;
 extern int test_quiet;
 extern unsigned test_panics;
 
 static int failures, checks;
+
+int	test_wpa(int *, int *);
 
 #define CHECK(c) do {							\
 	checks++;							\
@@ -447,6 +450,41 @@ test_crc32(void)
 	CHECK(ether_crc32_be(check, 9) == 0x9b63d02cU);
 }
 
+static int
+hexeq(const uint8_t *b, const char *hex)
+{
+	static const char digits[] = "0123456789abcdef";
+	size_t i;
+
+	for (i = 0; hex[2 * i] != '\0'; i++)
+		if (hex[2 * i] != digits[b[i] >> 4] ||
+		    hex[2 * i + 1] != digits[b[i] & 0xf])
+			return 0;
+	return 1;
+}
+
+/* WPA2 PSK = PBKDF2-HMAC-SHA1(passphrase, ssid, 4096, 32). */
+static void
+test_pbkdf2(void)
+{
+	uint8_t key[32];
+
+	/* RFC 6070 test 1 */
+	CHECK(pkcs5_pbkdf2("password", 8, (const uint8_t *)"salt", 4, key, 20,
+	    1) == 0);
+	CHECK(hexeq(key, "0c60c80f961f0e71f3a9b524af6012062fe037a6"));
+	/* RFC 6070 test 3: 4096 rounds, as WPA uses */
+	CHECK(pkcs5_pbkdf2("password", 8, (const uint8_t *)"salt", 4, key, 20,
+	    4096) == 0);
+	CHECK(hexeq(key, "4b007901b765489abead49d926f721d065a429c1"));
+	/* IEEE 802.11i-2004 H.4.1: two SHA1 blocks */
+	CHECK(pkcs5_pbkdf2("password", 8, (const uint8_t *)"IEEE", 4, key, 32,
+	    4096) == 0);
+	CHECK(hexeq(key, "f42c6fc52df0ebef9ebb4b90b38a5f90"
+	    "2e83fe1b135a70e23aed762e9710a12e"));
+	CHECK(pkcs5_pbkdf2("x", 1, (const uint8_t *)"s", 1, key, 32, 0) == -1);
+}
+
 static void
 test_rddm(void)
 {
@@ -465,6 +503,8 @@ main(void)
 {
 	test_rddm();
 	test_crc32();
+	test_pbkdf2();
+	test_wpa(&checks, &failures);
 	test_misc();
 	test_mbuf();
 	test_bus_dma();
