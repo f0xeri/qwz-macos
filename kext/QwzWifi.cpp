@@ -8,6 +8,7 @@
  * an Ethernet interface (itlwm style): Ethernet frames are copied between
  * macOS mbufs and OpenBSD mbufs in compat/autoconf.c.
  * Stage 4: sleep/wake, packet counters, the link speed follows the TX rate.
+ * HeliPort (itlwm's menu app) can pick the network: kext/QwzUserClient.cpp.
  *
  * Boot-args:
  *   -qwzon     required, otherwise the driver does not attach at all
@@ -15,9 +16,10 @@
  *   qwzdebug=N qwz debug mask (QWZ_D_* in qwzvar.h), default 0 (errors only).
  *              0x7 = MISC|MHI|QMI; slows bring-up, qwz's 1 s QMI timeouts may fire
  *
- * The network comes from the "QwzNetwork" dictionary (SSID, Password) in
- * the personality, which scripts/build.sh copies from config/wifi.plist.
- * Without it the driver only scans.
+ * The network to join at boot comes from the "QwzNetwork" dictionary (SSID,
+ * Password) in the personality, which scripts/build.sh copies from
+ * config/wifi.plist. Without it the driver only scans until HeliPort
+ * picks a network.
  *
  * SPDX-License-Identifier: GPL-2.0-only (qwz parts: ISC)
  */
@@ -41,8 +43,7 @@
 #include "os_bridge.h"
 #include "../compat/include/qwzmac/os.h"
 #include "../compat/include/qwzmac/attach.h"
-
-#define QLOG(fmt, ...) qwzmac_log("QwzWifi: " fmt "\n", ##__VA_ARGS__)
+#include "QwzWifi.h"
 
 /* 802.11 MTU (2304) plus the Ethernet header, as in compat/autoconf.c. */
 #define QWZ_FRAME_MAX	(2304 + 14)
@@ -51,59 +52,6 @@
 #define QWZ_RATE_POLL_MS	2000
 
 extern "C" uint32_t qwz_debug;	/* qwz/qwz.c, built with QWZ_DEBUG */
-
-class QwzWifi : public IOEthernetController {
-	OSDeclareDefaultStructors(QwzWifi)
-public:
-	IOService *probe(IOService *provider, SInt32 *score) override;
-	bool start(IOService *provider) override;
-	void stop(IOService *provider) override;
-
-	bool createWorkLoop() override;
-	bool configureInterface(IONetworkInterface *netif) override;
-	IOWorkLoop *getWorkLoop() const override;
-	IOReturn enable(IONetworkInterface *netif) override;
-	IOReturn disable(IONetworkInterface *netif) override;
-	IOReturn getHardwareAddress(IOEthernetAddress *addr) override;
-	UInt32 outputPacket(mbuf_t m, void *param) override;
-	IOReturn setPromiscuousMode(bool active) override;
-	IOReturn setMulticastMode(bool active) override;
-	IOReturn setMulticastList(IOEthernetAddress *addrs, UInt32 count) override;
-	IOReturn selectMedium(const IONetworkMedium *medium) override;
-	const OSString *newVendorString() const override;
-	const OSString *newModelString() const override;
-
-private:
-	void logDevice(IOPCIDevice *pci);
-	bool readNetwork(qwzmac_network *net);
-	bool createMedium();
-	static IOReturn powerMessage(void *target, void *refCon,
-	    UInt32 messageType, IOService *provider, void *arg,
-	    vm_size_t argSize);
-	static void netReady(void *cookie, const uint8_t mac[6]);
-	static void netInput(void *cookie, const void *frame, size_t len);
-	static void netLink(void *cookie, int up, uint64_t baudrate);
-	static void linkTc(thread_call_param_t p0, thread_call_param_t p1);
-	void countStat(UInt32 IONetworkStats::*field);
-
-	IOPCIDevice	*fPci;
-	void		*fQwz;
-	bool		 fOsInit;
-	IONotifier	*fPowerNotifier;
-	IOWorkLoop	*fWorkLoop;
-
-	IOLock		*fIfLock;	/* fNetIf vs. stop() */
-	IOEthernetInterface *fNetIf;
-	bool		 fStopping;
-	IONetworkMedium	*fMedium;	/* retained */
-	uint8_t		 fMac[6];
-
-	thread_call_t	 fLinkTc;	/* setLinkStatus() outside the spl lock */
-	volatile int	 fLinkUp;
-	volatile uint64_t fLinkSpeed;	/* last speed given to setLinkStatus() */
-	volatile uint64_t fLinkBaudrate; /* net80211's if_baudrate at link up */
-	IONetworkStats	*fNetStats;	/* netstat's packet and error counters */
-};
 
 OSDefineMetaClassAndStructors(QwzWifi, IOEthernetController)
 
@@ -272,6 +220,7 @@ QwzWifi::start(IOService *provider)
 	fLinkSpeed = 0;
 	fLinkBaudrate = 0;
 	fNetStats = nullptr;
+	fClientCalls = 0;
 	bzero(fMac, sizeof(fMac));
 	fIfLock = IOLockAlloc();
 	if (fIfLock == nullptr)
@@ -283,7 +232,7 @@ QwzWifi::start(IOService *provider)
 		return false;
 	}
 	qwzmac_log_start(pci);
-	QLOG("start, version 0.0.5 (built " __DATE__ " " __TIME__ ")");
+	QLOG("start, version " QWZ_VERSION " (built " __DATE__ " " __TIME__ ")");
 
 	if (!IOEthernetController::start(provider)) {
 		QLOG("IOEthernetController::start failed");
@@ -366,8 +315,60 @@ QwzWifi::start(IOService *provider)
 	if (fPowerNotifier == nullptr)
 		QLOG("no shutdown notification, DMA stays on at restart");
 
+	/*
+	 * HeliPort talks only to an IOEthernetController whose IOClass
+	 * property is "itlwm" (ClientKit/Api.c, isSupportService()); it
+	 * then opens our IOUserClientClass, QwzUserClient (kext/heliport.h).
+	 * The property is informational once matching is done: IOKit
+	 * identifies us by our meta class (ioreg still shows QwzWifi) and
+	 * the bundle identifier.
+	 */
+	setProperty("IOClass", "itlwm");
+	/*
+	 * IOEthernetController::start() does not register the controller;
+	 * unregistered, it is invisible to IOServiceGetMatchingServices()
+	 * and so to HeliPort (seen with 0.0.6: "!registered" in ioreg).
+	 */
+	registerService();
+
 	/* The network interface is published by netReady(), once the MAC is known. */
 	return true;
+}
+
+bool
+QwzWifi::clientEnter()
+{
+	bool ok;
+
+	IOLockLock(fIfLock);
+	ok = !fStopping && fQwz != nullptr;
+	if (ok)
+		fClientCalls++;
+	IOLockUnlock(fIfLock);
+	return ok;
+}
+
+void
+QwzWifi::clientExit()
+{
+	IOLockLock(fIfLock);
+	if (--fClientCalls == 0)
+		IOLockWakeup(fIfLock, &fClientCalls, false);
+	IOLockUnlock(fIfLock);
+}
+
+void
+QwzWifi::bsdName(char *buf, size_t len)
+{
+	IOEthernetInterface *netif;
+
+	buf[0] = '\0';
+	IOLockLock(fIfLock);
+	netif = fNetIf;
+	if (netif != nullptr && netif->getIfnet() != nullptr)
+		snprintf(buf, len, "%s%u", ifnet_name(netif->getIfnet()),
+		    ifnet_unit(netif->getIfnet()));
+	IOLockUnlock(fIfLock);
 }
 
 IOReturn
@@ -402,6 +403,27 @@ QwzWifi::powerMessage(void *target, void *refCon, UInt32 messageType,
 	return kIOReturnSuccess;
 }
 
+/*
+ * The name macOS gives the interface's network service ("Ethernet 2"
+ * otherwise). configd (SCNetworkInterface.c) names a built-in Ethernet
+ * interface "Ethernet"/"Ethernet N" whatever the driver says; for one that
+ * is not built in it takes the "Product Name" property of the interface or
+ * its providers, as "iPhone USB" gets its name from USB. So mark the
+ * interface not built in and give it a product name, from QwzInterfaceName
+ * in the personality (kext/Info.plist). Only a newly created service gets
+ * it; an existing one keeps the name it was saved with.
+ */
+void
+QwzWifi::nameInterface(IONetworkInterface *netif)
+{
+	OSString *name = OSDynamicCast(OSString, getProperty("QwzInterfaceName"));
+
+	if (name == nullptr || name->getLength() == 0)
+		return;
+	netif->setProperty(kIOBuiltin, false);
+	netif->setProperty("Product Name", name);
+}
+
 /* Bring-up thread, no spl lock: firmware is up, publish the interface. */
 void
 QwzWifi::netReady(void *cookie, const uint8_t mac[6])
@@ -415,11 +437,13 @@ QwzWifi::netReady(void *cookie, const uint8_t mac[6])
 		return;
 	}
 	bcopy(mac, me->fMac, sizeof(me->fMac));
-	if (!me->attachInterface((IONetworkInterface **)&netif, true)) {
+	if (!me->attachInterface((IONetworkInterface **)&netif, false)) {
 		IOLockUnlock(me->fIfLock);
 		QLOG("cannot attach the network interface");
 		return;
 	}
+	me->nameInterface(netif);
+	netif->registerService();
 	me->fNetIf = netif;
 	IOLockUnlock(me->fIfLock);
 	me->setLinkStatus(kIONetworkLinkValid);
@@ -629,6 +653,8 @@ QwzWifi::stop(IOService *provider)
 	qwzmac_qwz_disconnect(fQwz);
 	IOLockLock(fIfLock);
 	fStopping = true;
+	while (fClientCalls > 0)	/* QwzUserClient calls into qwz */
+		IOLockSleep(fIfLock, &fClientCalls, THREAD_UNINT);
 	netif = fNetIf;
 	fNetIf = nullptr;
 	IOLockUnlock(fIfLock);

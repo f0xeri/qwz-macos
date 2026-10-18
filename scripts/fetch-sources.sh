@@ -26,6 +26,8 @@ clone https://github.com/openbsd/src.git openbsd $(<../patches/openbsd/BASE) \
   /sys/dev/acpi/acpi.c /sys/dev/acpi/acpi_x86.c
 # itlwm — macOS wrapper + itl80211 (old OpenBSD net80211 port) (GPL-2.0)
 clone https://github.com/OpenIntelWireless/itlwm.git itlwm 53c51c2cdd6e4b69beb91f310d74c53422b0f8bd
+# HeliPort — itlwm's Wi-Fi menu app; its ClientKit is the protocol kext/heliport.h speaks (BSD-3)
+clone https://github.com/OpenIntelWireless/HeliPort.git HeliPort 898bcd8366844fdcfe047d7ebdf90631e4642b66
 # Kernel headers for building on any machine (acidanthera)
 clone https://github.com/acidanthera/MacKernelSDK.git MacKernelSDK 3f750085caa17ec3a7880f11c11bf4f48cd6a164
 # Reference only: native-menu Realtek port (IO80211 front, Tahoe legacy stack)

@@ -58,4 +58,6 @@ nm -u $OUT/QwzWifi.kext/Contents/MacOS/QwzWifi > $OUT/undefined.txt
 echo "undefined symbols: $(wc -l < $OUT/undefined.txt) (list in $OUT/undefined.txt)"
 grep -v '^__Z' $OUT/undefined.txt | tr '\n' ' '; echo
 ls -la $OUT/QwzWifi.kext/Contents/MacOS/QwzWifi
-echo "OK: $(pwd)/$OUT/QwzWifi.kext"
+# qwzctl: command-line client for the same interface HeliPort uses.
+clang -Wall -O2 $ARCH -framework IOKit -framework CoreFoundation tools/qwzctl.c -o $OUT/qwzctl
+echo "OK: $(pwd)/$OUT/QwzWifi.kext, $(pwd)/$OUT/qwzctl"

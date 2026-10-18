@@ -82,6 +82,60 @@ void	qwzmac_qwz_shutdown(void *dev);
 void	qwzmac_qwz_sleep(void *dev);
 void	qwzmac_qwz_wake(void *dev);
 
+/*
+ * Management, for a Wi-Fi app such as HeliPort. All may block (the join
+ * reloads the firmware) and must not be called with the spl lock held.
+ * They return 0 or an errno; EBUSY while bring-up, sleep or shutdown
+ * owns the chip.
+ */
+
+/* Join exactly this network (open if the passphrase is empty; 64 hex
+ * digits are taken as the PSK). The passphrase is wiped. Brings the
+ * interface up. */
+int	qwzmac_qwz_join(void *dev, struct qwzmac_network *net);
+/* Forget the network: scan only, join nothing. */
+int	qwzmac_qwz_leave(void *dev);
+/* Interface up (radio on, joins the network if one is set) or down. */
+int	qwzmac_qwz_set_power(void *dev, int on);
+int	qwzmac_qwz_power(void *dev);	/* 1 if up and running */
+/* Start a background scan while associated (scanning goes on anyway
+ * while not associated). */
+void	qwzmac_qwz_scan(void *dev);
+/* The firmware build id, e.g. "WLAN.HMT.1.1.c5-00302-...". */
+void	qwzmac_qwz_fw_version(void *dev, char *buf, size_t len);
+
+struct qwzmac_sta_info {
+	int		state;		/* 0 INIT, 1 SCAN, 2 AUTH, 3 ASSOC, 4 RUN */
+	int		phy;		/* 0 11a, 1 11b, 2 11g, 3 11n, 4 11ac, 5 11ax */
+	uint8_t		ssid[32];
+	uint8_t		ssid_len;
+	uint8_t		bssid[6];
+	unsigned	channel;
+	unsigned	width_mhz;
+	int		rssi_dbm;
+	int		noise_dbm;
+	int		mcs;		/* HT MCS index of the last TX, or -1 */
+	uint64_t	rate_bps;	/* see qwzmac_qwz_tx_rate() */
+};
+/* state is always set; the rest only when associated (returns ENOTCONN
+ * otherwise). */
+int	qwzmac_qwz_sta_info(void *dev, struct qwzmac_sta_info *si);
+
+struct qwzmac_bss {
+	uint8_t		ssid[32];
+	uint8_t		ssid_len;
+	uint8_t		bssid[6];
+	unsigned	channel;
+	int		rssi_dbm;
+	/* net80211's RSN fields as is (IEEE80211_PROTO_*, _AKM_*, _CIPHER_*). */
+	uint32_t	supported_rsnprotos, rsnprotos;
+	uint32_t	supported_rsnakms, rsnakms;
+	uint32_t	rsnciphers, rsngroupcipher, rsngroupmgmtcipher, rsncipher;
+	uint16_t	capinfo, rsncaps;
+};
+/* Copy up to max networks from the last scans; returns how many. */
+int	qwzmac_qwz_scan_results(void *dev, struct qwzmac_bss *out, int max);
+
 #ifdef __cplusplus
 }
 #endif
