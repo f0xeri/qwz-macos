@@ -5,16 +5,16 @@ usage: scripts/kc-classsize.py [-v] [CLASS ...]   (default: the classes native W
        -v  also print the segments, the hits per class and the code around them
 
 Read-only, needs no root. Native Wi-Fi (docs/native-wifi-research.md §8) subclasses Apple's
-IO80211/Skywalk classes through reverse-engineered headers. A vtable check (kcvtab.py) shows the
+IO80211/Skywalk classes through reverse-engineered headers. A vtable check (kc-abi.py) shows the
 method slots; this shows the sizes, which decide where a subclass's own fields start. Every
 class registers itself with OSMetaClass::OSMetaClass(this, "Name", &Super::gMetaClass, sizeof);
 on x86_64 that call loads the name with `lea rsi,[rip+...]` and the size with `mov ecx,imm32`.
 The script finds the name string, every instruction that loads it into rsi, and the size next
 to it. A hit counts as confirmed when a call to OSMetaClass's constructor follows."""
-import mmap, re, struct, subprocess, sys
+import os, struct, sys
 
-KCS = ['/System/Library/KernelCollections/BootKernelExtensions.kc',
-       '/System/Library/KernelCollections/SystemKernelExtensions.kc']
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from kclib import KCS, KC, Space, demangle, rel32  # noqa: E402
 
 # Sizes the Tahoe headers of laobamac/itlwm 738d4c6 (include/Airport/macOS26/) and
 # MacKernelSDK 3f75008 imply, computed with clang. A mismatch means those headers are wrong
@@ -30,106 +30,7 @@ EXPECT = {
 }
 
 LEA_RSI, LEA_RDX, MOV_RDX = b'\x48\x8d\x35', b'\x48\x8d\x15', b'\x48\x8b\x15'
-MOV_ECX, CALL, JMP, JMP_IND = 0xb9, 0xe8, 0xe9, b'\xff\x25'
-
-
-class KC:
-    def __init__(self, path):
-        self.path = path
-        f = open(path, 'rb')
-        self.m = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
-        self.segs, self.entries = [], []
-        for cmd, p in self.cmds(0):
-            if cmd == 0x19:                                 # LC_SEGMENT_64
-                name = self.m[p + 8:p + 24].rstrip(b'\0').decode()
-                va, vs, fo, fs, _maxp, initp = struct.unpack_from('<QQQQii', self.m, p + 24)
-                self.segs.append((name, va, fo, fs, initp))
-            elif cmd == 0x80000035:                         # LC_FILESET_ENTRY
-                self.entries.append(struct.unpack_from('<Q', self.m, p + 16)[0])
-        self.base = min(s[1] for s in self.segs)
-
-    def off(self, va):
-        for _n, sva, fo, fs, _x in self.segs:
-            if sva <= va < sva + fs:
-                return fo + va - sva
-        return None
-
-    def cmds(self, off):
-        magic, _c, _s, _t, ncmds = struct.unpack_from('<IiiII', self.m, off)
-        if magic != 0xfeedfacf:
-            sys.exit('%s: not a 64-bit Mach-O' % self.path)
-        p = off + 32
-        for _ in range(ncmds):
-            cmd, size = struct.unpack_from('<II', self.m, p)
-            yield cmd, p
-            p += size
-
-    def symbols(self):
-        for fileoff in self.entries:
-            for cmd, p in self.cmds(fileoff):
-                if cmd != 0x2:                              # LC_SYMTAB
-                    continue
-                symoff, nsyms, stroff, _ss = struct.unpack_from('<IIII', self.m, p + 8)
-                for i in range(nsyms):
-                    strx, typ, _sect, _desc, value = struct.unpack_from('<IBBHQ', self.m, symoff + 16 * i)
-                    if typ & 0xe0 or (typ & 0x0e) != 0x0e:  # debug entries, undefined
-                        continue
-                    end = self.m.find(b'\0', stroff + strx)
-                    yield value, self.m[stroff + strx:end].decode(errors='replace')
-
-
-class Space:
-    """All collections together: symbols by address, and pointers between collections."""
-    def __init__(self, kcs):
-        self.kcs, self.syms = kcs, {}
-        for kc in kcs:
-            for value, name in kc.symbols():
-                self.syms.setdefault(value, name)
-
-    def at(self, va):
-        for kc in self.kcs:
-            o = kc.off(va)
-            if o is not None:
-                return kc, o
-        return None, None
-
-    def ptr(self, va):
-        """The pointer stored at va (a GOT slot), decoding a kernel-cache chained pointer."""
-        kc, o = self.at(va)
-        if kc is None:
-            return None
-        raw = struct.unpack_from('<Q', kc.m, o)[0]
-        if raw in self.syms:
-            return raw
-        level = (raw >> 30) & 3                 # dyld_chained_ptr_64_kernel_cache_rebase
-        if level < len(self.kcs):
-            return self.kcs[level].base + (raw & 0x3fffffff)
-        return None
-
-    def name(self, va, follow=True):
-        """Symbol at va; through one `jmp [rip+GOT]` stub if va is a stub."""
-        if va in self.syms:
-            return self.syms[va]
-        kc, o = self.at(va)
-        if follow and kc is not None and kc.m[o:o + 2] == JMP_IND:
-            t = self.ptr(va + 6 + rel32(kc.m, o + 2))
-            return self.syms.get(t) if t is not None else None
-        return None
-
-
-def demangle(names):
-    # Mach-O symbols carry an extra leading underscore that only Apple's c++filt strips
-    plain = [n[1:] if n.startswith('__Z') else n for n in names]
-    try:
-        out = subprocess.run(['c++filt'], input='\n'.join(plain), capture_output=True,
-                             text=True).stdout.split('\n')
-        return out[:len(names)] if len(out) >= len(names) else names
-    except OSError:
-        return names
-
-
-def rel32(m, at):
-    return struct.unpack_from('<i', m, at)[0]
+MOV_ECX, CALL, JMP = 0xb9, 0xe8, 0xe9
 
 
 def main():
