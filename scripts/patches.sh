@@ -34,7 +34,11 @@ fetch() { # rev -> full hash, fetched into the clone if needed
 gen() {
 	local f
 	for f in $FILES; do
-		[[ -f $W/$f ]] || die "$W/$f is missing (deleted?): restore it or apply --force"
+		if [[ ! -f $W/$f ]]; then
+			# New in FILES since the last apply: nothing of ours in it yet.
+			g cat-file -e upstream:$f 2>/dev/null || continue
+			die "$W/$f is missing (deleted?): restore it or apply --force"
+		fi
 		g diff --quiet upstream -- $f && continue
 		mkdir -p $1/${f:h}
 		g -c diff.noprefix=false -c diff.mnemonicPrefix=false diff --no-color \
