@@ -14,7 +14,7 @@ to it. A hit counts as confirmed when a call to OSMetaClass's constructor follow
 import os, struct, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from kclib import KCS, KC, Space, demangle, rel32  # noqa: E402
+from kclib import KCS, KC, Space, demangle, metaclass_hits  # noqa: E402
 
 # Sizes the Tahoe headers of laobamac/itlwm 738d4c6 (include/Airport/macOS26/) and
 # MacKernelSDK 3f75008 imply, computed with clang. A mismatch means those headers are wrong
@@ -29,10 +29,6 @@ EXPECT = {
     'IO80211Controller': 0x128, 'IO80211WorkQueue': 0x50,
 }
 
-LEA_RSI, LEA_RDX, MOV_RDX = b'\x48\x8d\x35', b'\x48\x8d\x15', b'\x48\x8b\x15'
-MOV_ECX, CALL, JMP = 0xb9, 0xe8, 0xe9
-
-
 def main():
     args = sys.argv[1:]
     verbose = '-v' in args
@@ -40,39 +36,7 @@ def main():
     kcs = [KC(p) for p in KCS]
     space = Space(kcs)
 
-    found = {c: [] for c in classes}
-    nstr = {c: 0 for c in classes}
-    for kc in kcs:
-        m = kc.m
-        if verbose:
-            print('# %s' % kc.path)
-            for name, va, fo, fs, prot in kc.segs:
-                print('#   %-16s va 0x%x fileoff 0x%x size 0x%x prot %d' % (name, va, fo, fs, prot))
-        # VA of each class name string ("\0Name\0"). Not only __TEXT: where the
-        # strings and the code end up differs between collections, and the
-        # protection bits of a collection's segments are not reliable.
-        strva = {}
-        for name, va, fo, fs, prot in kc.segs:
-            if name in ('__LINKEDIT', '__PRELINK_INFO'):
-                continue
-            for c in classes:
-                pat = b'\0' + c.encode() + b'\0'
-                at = m.find(pat, fo, fo + fs)
-                while at >= 0:
-                    strva[va + at + 1 - fo] = c
-                    nstr[c] += 1
-                    at = m.find(pat, at + 1, fo + fs)
-        # every `lea rsi,[rip+disp]` in code that points at one of them
-        for name, va, fo, fs, prot in kc.segs:
-            if 'TEXT' not in name and not prot & 4:
-                continue
-            at = m.find(LEA_RSI, fo, fo + fs)
-            while at >= 0:
-                target = va + (at - fo) + 7 + rel32(m, at + 3)
-                c = strva.get(target)
-                if c:
-                    found[c].append(inspect(kc, at, va - fo, space))
-                at = m.find(LEA_RSI, at + 1, fo + fs)
+    found, nstr = metaclass_hits(kcs, space, classes, verbose)
 
     if verbose:
         for c in classes:
@@ -114,32 +78,6 @@ def main():
 
 def fmt(v):
     return '-' if v is None else '0x%x' % v
-
-
-def inspect(kc, at, delta, space):
-    """Around the `lea rsi` at file offset at: the size (mov ecx,imm32), the super class
-    (lea rdx, or mov rdx from a GOT slot), and the function called next."""
-    m = kc.m
-    lo, hi = max(at - 40, 0), at + 48
-    size = sup = call = None
-    best = None
-    for i in range(lo, hi):
-        if m[i] == MOV_ECX and (best is None or abs(i - at) < abs(best - at)):
-            v = struct.unpack_from('<I', m, i + 1)[0]
-            if 0x10 <= v <= 0x100000 and v % 8 == 0:
-                best, size = i, v
-        if sup is None and m[i:i + 3] in (LEA_RDX, MOV_RDX):
-            t = i + delta + 7 + rel32(m, i + 3)
-            if m[i:i + 3] == MOV_RDX:
-                t = space.ptr(t)
-            sup = space.name(t, follow=False) if t is not None else None
-    for i in range(at + 7, hi):
-        if m[i] in (CALL, JMP):
-            t = space.name(i + delta + 5 + rel32(m, i + 1))
-            if t:
-                call = t
-                break
-    return {'size': size, 'super': sup, 'call': call, 'va': at + delta}
 
 
 if __name__ == '__main__':

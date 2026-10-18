@@ -1,0 +1,29 @@
+QwzAirport.kext: credits and what comes from where
+
+QwzAirport is the native Wi-Fi front of QwzWifi (docs/native-wifi-research.md §8.5, §8.8).
+It is GPL-2.0, like kext/. It starts from the native front of laobamac/itlwm, commit
+738d4c61b5a64433b27c1ab09dba94916ab77d8d (https://github.com/laobamac/itlwm, GPL-2.0),
+itself based on AirportItlwm by zxystd and the OpenIntelWireless contributors
+(https://github.com/OpenIntelWireless/itlwm). The fork is a starting point, not a dependency:
+its later fixes are read in its commits and ported by hand (third_party/laobamac holds the
+pinned clone, scripts/fetch-sources.sh).
+
+Taken, and from which file of laobamac/itlwm 738d4c6:
+- abi/Airport/: IO80211/Skywalk/CoreCapture headers from include/Airport/ (Tahoe subset),
+  copied by scripts/airport-vendor.sh; our change is abi/qwzairport.patch (QWZAIRPORT).
+  apple80211_var.h, apple80211_ioctl.h are Apple's (APSL headers, as published).
+  The headers are trusted only after scripts/kc-abi.py --check on the running build.
+- WCL.hpp: WCL/WCL.hpp, unmodified (message ids and layouts, request decoders).
+- QwzAirport.cpp/.hpp: from AirportItlwm/AirportItlwmV2.cpp/.hpp (work queue, CoreCapture
+  pipes and fault reporter, interface setup, capability bits). Without the PCI, power
+  management and itlwm HAL parts: QwzWifi owns the device.
+- QwzAirportInterface.cpp/.hpp: from AirportItlwm/AirportItlwmSkywalkInterface.cpp/.hpp and
+  WCL/WCL.cpp (lifecycle messages, state and channel requests). Their net80211 accesses are
+  replaced by calls through kext/airport_api.h, implemented by QwzWifi over OpenBSD net80211.
+- QwzAirportEthernet.cpp/.hpp: from AirportItlwm/AirportItlwmEthernetInterface.cpp/.hpp,
+  largely unchanged.
+
+Ours: kext/airport_api.h and its implementation in kext/QwzWifi.cpp, compat/autoconf.c's
+qwzmac_qwz_channels()/qwzmac_qwz_country()/radio callback, QWZMAC patches in qwz,
+scripts/airport-stubs.py (QwzAirportStubs.inc), scripts/kc-abi.py, scripts/kc-classsize.py,
+scripts/kclib.py, scripts/airport-vendor.sh.

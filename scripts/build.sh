@@ -60,4 +60,26 @@ grep -v '^__Z' $OUT/undefined.txt | tr '\n' ' '; echo
 ls -la $OUT/QwzWifi.kext/Contents/MacOS/QwzWifi
 # qwzctl: command-line client for the same interface HeliPort uses.
 clang -Wall -O2 $ARCH -framework IOKit -framework CoreFoundation tools/qwzctl.c -o $OUT/qwzctl
-echo "OK: $(pwd)/$OUT/QwzWifi.kext, $(pwd)/$OUT/qwzctl"
+
+# QwzAirport.kext: the native Wi-Fi front (airport/, docs/native-wifi-research.md §8.5).
+# A separate kext so that QwzWifi.kext keeps to public KPIs: only this one links
+# IO80211Family, IOSkywalkFamily and corecapture, through airport/abi/ (checked against
+# the running build by scripts/kc-abi.py --check). No OpenBSD code in it.
+python3 scripts/airport-stubs.py
+AIRFLAGS=(-Iairport/abi -DQWZAIRPORT -D__PRIVATE_SPI__ -DAIRPORT_WCL
+          -D__IO80211_TARGET=__MAC_26_0 -DIO80211FAMILY_V2 -Wno-inconsistent-missing-override
+          -Wno-overloaded-virtual -Wno-unused-private-field -Wno-invalid-offsetof)
+AOBJS=()
+for src in airport/*.cpp; do
+  o=$OUT/obj/air_${src:t:r}.o; clang++ "${COMMON[@]}" "${CXXFLAGS[@]}" "${AIRFLAGS[@]}" -c $src -o $o; AOBJS+=$o
+done
+clang "${COMMON[@]}" -c airport/kmod_info.c -o $OUT/obj/air_kmod_info.o; AOBJS+=$OUT/obj/air_kmod_info.o
+clang++ $ARCH -isysroot "$SDK" -nostdlib -Xlinker -kext \
+        "${AOBJS[@]}" -L"$SDK/usr/lib" -lkmodc++ -lkmod -o $OUT/QwzAirport.bin
+rm -rf $OUT/QwzAirport.kext; mkdir -p $OUT/QwzAirport.kext/Contents/MacOS
+cp airport/Info.plist $OUT/QwzAirport.kext/Contents/Info.plist
+cp $OUT/QwzAirport.bin $OUT/QwzAirport.kext/Contents/MacOS/QwzAirport
+plutil -lint $OUT/QwzAirport.kext/Contents/Info.plist
+# Loaded by hand while in development (kmutil load), so sign it ad hoc.
+codesign -s - -f $OUT/QwzAirport.kext 2>/dev/null || echo "WARNING: QwzAirport.kext not signed"
+echo "OK: $(pwd)/$OUT/QwzWifi.kext, $(pwd)/$OUT/QwzAirport.kext, $(pwd)/$OUT/qwzctl"

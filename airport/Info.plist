@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key><string>en</string>
+	<key>CFBundleExecutable</key><string>QwzAirport</string>
+	<key>CFBundleIdentifier</key><string>com.local.QwzAirport</string>
+	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+	<key>CFBundleName</key><string>QwzAirport</string>
+	<key>CFBundlePackageType</key><string>KEXT</string>
+	<key>CFBundleShortVersionString</key><string>0.1.0</string>
+	<key>CFBundleVersion</key><string>0.1.0</string>
+	<key>IOKitPersonalities</key>
+	<dict>
+		<key>QwzAirport</key>
+		<dict>
+			<key>CFBundleIdentifier</key><string>com.local.QwzAirport</string>
+			<key>IOClass</key><string>QwzAirport</string>
+			<key>IOProviderClass</key><string>QwzWifi</string>
+			<key>IOMatchCategory</key><string>WiFiDriver</string>
+			<key>IONetworkRootType</key><string>airport</string>
+			<key>IOResourceMatch</key><string>IOBSD</string>
+			<!-- macOS builds whose IO80211/Skywalk ABI matched airport/abi
+			     (scripts/kc-abi.py --check). QwzAirport refuses any other. -->
+			<key>QwzAirportBuilds</key>
+			<array>
+				<string>25G241</string>
+			</array>
+		</dict>
+	</dict>
+	<key>NSHumanReadableCopyright</key>
+	<string>GPL-2.0. Based on AirportItlwm (zxystd, OpenIntelWireless) and laobamac/itlwm, see CREDITS.</string>
+	<key>OSBundleLibraries</key>
+	<dict>
+		<key>com.apple.driver.corecapture</key><string>1.0</string>
+		<key>com.apple.iokit.IO80211Family</key><string>1.0</string>
+		<key>com.apple.iokit.IONetworkingFamily</key><string>1.5.0</string>
+		<key>com.apple.iokit.IOSkywalkFamily</key><string>1.0</string>
+		<key>com.apple.kpi.bsd</key><string>19.0.0</string>
+		<key>com.apple.kpi.iokit</key><string>19.0.0</string>
+		<key>com.apple.kpi.libkern</key><string>19.0.0</string>
+		<key>com.apple.kpi.mach</key><string>19.0.0</string>
+	</dict>
+</dict>
+</plist>

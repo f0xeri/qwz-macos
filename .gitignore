@@ -6,3 +6,4 @@ firmware/
 config/wifi.plist
 /openbsd/
 /local/
+airport/QwzAirportStubs.inc

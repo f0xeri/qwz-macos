@@ -32,6 +32,11 @@ clone https://github.com/OpenIntelWireless/HeliPort.git HeliPort 898bcd8366844fd
 clone https://github.com/acidanthera/MacKernelSDK.git MacKernelSDK 3f750085caa17ec3a7880f11c11bf4f48cd6a164
 # Reference only: native-menu Realtek port (IO80211 front, Tahoe legacy stack)
 clone https://github.com/FranciumOS-org/Airport_RTW89.git Airport_RTW89 e7f449cd5314671c64a43ef83d88a87fc980f595
+# Native Wi-Fi front of AirportItlwm for Sequoia/Tahoe (GPL-2.0). airport/ starts from its ABI
+# headers, controller skeleton and WCL encoding (docs/native-wifi-research.md §8.8); kept here to
+# diff against and to read its later fixes. Not a build dependency.
+clone https://github.com/laobamac/itlwm.git laobamac 738d4c61b5a64433b27c1ab09dba94916ab77d8d \
+  /include/Airport/ /AirportItlwm/ /LICENSE /README.md
 # Reference only: Linux ath12k (GPL) — read, do not copy into ISC files
 clone https://github.com/torvalds/linux.git linux 70dd4ee72eb2d5793c62e71c14e3aba78e5a4e56 \
   /drivers/net/wireless/ath/ath12k/ /drivers/bus/mhi/

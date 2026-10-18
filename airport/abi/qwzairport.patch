@@ -1,0 +1,19 @@
+--- a/Airport/macOS26/IO80211ControllerV2.h
++++ b/Airport/macOS26/IO80211ControllerV2.h
+@@ -143,8 +143,16 @@
+     OSDeclareAbstractStructors(IO80211Controller)
+ public:
+     IOReturn postMessage(IO80211SkywalkInterface *, unsigned int, void *, unsigned long, bool);
++#ifndef QWZAIRPORT
++    /*
++     * QWZAIRPORT: these two map MacKernelSDK's unused reserved slots 6 and 7 of
++     * IONetworkController onto the real methods. The macOS SDK we build with already
++     * declares those slots (allocatePacketNoWait, setHardwareAssists), so here they would be
++     * two new virtuals and shift every IO80211Controller slot by 2 (scripts/kc-abi.py --check).
++     */
+     virtual void _RESERVEDIONetworkController6() __asm__("__ZN19IONetworkController20allocatePacketNoWaitEj");
+     virtual void _RESERVEDIONetworkController7() __asm__("__ZN19IONetworkController18setHardwareAssistsEjj");
++#endif
+     virtual void free();
+     virtual bool init(OSDictionary*);
+     virtual IOReturn configureReport(IOReportChannelList*, unsigned int, void*, void*);

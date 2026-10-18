@@ -1,0 +1,29 @@
+laobamac/itlwm 738d4c61b5a64433b27c1ab09dba94916ab77d8d include/Airport (GPL-2.0, LICENSE)
+copied by scripts/airport-vendor.sh on 2026-10-19, then qwzairport.patch applied:
+Airport/Apple80211.h
+Airport/CCDataPipe.h
+Airport/CCLogPipe.h
+Airport/CCLogStream.h
+Airport/CCPipe.h
+Airport/CCStream.h
+Airport/IO80211ControllerV2.h
+Airport/IO80211InfraInterface.h
+Airport/IO80211InfraProtocol.h
+Airport/IO80211SkywalkInterface.h
+Airport/IO80211WorkLoop.h
+Airport/IO80211WorkQueue.h
+Airport/IOSkywalkLegacyEthernetInterface.h
+Airport/IOSkywalkPacketBufferPool.h
+Airport/apple80211_ioctl.h
+Airport/apple80211_var.h
+Airport/apple_private_spi.h
+Airport/debug.h
+Airport/macOS26/FaultReporter.h
+Airport/macOS26/IO80211ControllerV2.h
+Airport/macOS26/IO80211InfraInterface.h
+Airport/macOS26/IO80211InfraProtocol.h
+Airport/macOS26/IO80211SkywalkInterface.h
+Airport/macOS26/IO80211WorkQueue.h
+Airport/macOS26/IOSkywalkEthernetInterface.h
+Airport/macOS26/IOSkywalkInterface.h
+Airport/macOS26/IOSkywalkNetworkInterface.h
