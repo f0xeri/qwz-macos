@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Print the object size of IOKit classes from this Mac's kernel collections.
 
-usage: scripts/kc-classsize.py [CLASS ...]   (default: the classes native Wi-Fi subclasses)
+usage: scripts/kc-classsize.py [-v] [CLASS ...]   (default: the classes native Wi-Fi subclasses)
+       -v  also print the segments, the hits per class and the code around them
 
 Read-only, needs no root. Native Wi-Fi (docs/native-wifi-research.md §8) subclasses Apple's
 IO80211/Skywalk classes through reverse-engineered headers. A vtable check (kcvtab.py) shows the
@@ -42,7 +43,7 @@ class KC:
             if cmd == 0x19:                                 # LC_SEGMENT_64
                 name = self.m[p + 8:p + 24].rstrip(b'\0').decode()
                 va, vs, fo, fs, _maxp, initp = struct.unpack_from('<QQQQii', self.m, p + 24)
-                self.segs.append((name, va, fo, fs, initp & 4 != 0))
+                self.segs.append((name, va, fo, fs, initp))
             elif cmd == 0x80000035:                         # LC_FILESET_ENTRY
                 self.entries.append(struct.unpack_from('<Q', self.m, p + 16)[0])
         self.base = min(s[1] for s in self.segs)
@@ -132,27 +133,37 @@ def rel32(m, at):
 
 
 def main():
-    classes = sys.argv[1:] or list(EXPECT)
+    args = sys.argv[1:]
+    verbose = '-v' in args
+    classes = [a for a in args if a != '-v'] or list(EXPECT)
     kcs = [KC(p) for p in KCS]
     space = Space(kcs)
 
     found = {c: [] for c in classes}
+    nstr = {c: 0 for c in classes}
     for kc in kcs:
         m = kc.m
-        # VA of each class name string ("\0Name\0") in the non-executable __TEXT segments
+        if verbose:
+            print('# %s' % kc.path)
+            for name, va, fo, fs, prot in kc.segs:
+                print('#   %-16s va 0x%x fileoff 0x%x size 0x%x prot %d' % (name, va, fo, fs, prot))
+        # VA of each class name string ("\0Name\0"). Not only __TEXT: where the
+        # strings and the code end up differs between collections, and the
+        # protection bits of a collection's segments are not reliable.
         strva = {}
-        for name, va, fo, fs, ex in kc.segs:
-            if ex or not name.startswith('__TEXT'):
+        for name, va, fo, fs, prot in kc.segs:
+            if name in ('__LINKEDIT', '__PRELINK_INFO'):
                 continue
             for c in classes:
                 pat = b'\0' + c.encode() + b'\0'
                 at = m.find(pat, fo, fo + fs)
                 while at >= 0:
                     strva[va + at + 1 - fo] = c
+                    nstr[c] += 1
                     at = m.find(pat, at + 1, fo + fs)
-        # every `lea rsi,[rip+disp]` in executable code that points at one of them
-        for name, va, fo, fs, ex in kc.segs:
-            if not ex:
+        # every `lea rsi,[rip+disp]` in code that points at one of them
+        for name, va, fo, fs, prot in kc.segs:
+            if 'TEXT' not in name and not prot & 4:
                 continue
             at = m.find(LEA_RSI, fo, fo + fs)
             while at >= 0:
@@ -161,6 +172,14 @@ def main():
                 if c:
                     found[c].append(inspect(kc, at, va - fo, space))
                 at = m.find(LEA_RSI, at + 1, fo + fs)
+
+    if verbose:
+        for c in classes:
+            print('# %-28s %d name strings, %d `lea rsi` to them' % (c, nstr[c], len(found[c])))
+            for h in found[c][:3]:
+                kc, o = space.at(h['va'])
+                print('#   at 0x%x: %s' % (h['va'], kc.m[o - 24:o + 40].hex(' ')))
+                print('#     size %s super %s call %s' % (fmt(h['size']), h['super'], h['call']))
 
     names = []
     for hits in found.values():
