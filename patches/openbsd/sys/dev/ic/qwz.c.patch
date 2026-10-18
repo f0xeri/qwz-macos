@@ -1,7 +1,51 @@
 diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
 --- a/sys/dev/ic/qwz.c
 +++ b/sys/dev/ic/qwz.c
-@@ -20125,8 +20125,29 @@ qwz_hal_srng_setup(struct qwz_softc *sc, enum hal_ring_type type,
+@@ -177,7 +177,11 @@ int qwz_dp_peer_rx_pn_replay_config(struct qwz_softc *, struct qwz_vif *,
+ void qwz_setkey_clear(struct qwz_softc *);
+ void qwz_vif_purge(struct qwz_softc *);
+ 
++#ifdef QWZMAC
++int qwz_scan(struct qwz_softc *, int);	/* bgscan flag, as qwx_scan() */
++#else
+ int qwz_scan(struct qwz_softc *);
++#endif
+ void qwz_scan_abort(struct qwz_softc *);
+ int qwz_auth(struct qwz_softc *);
+ int qwz_deauth(struct qwz_softc *);
+@@ -416,6 +420,9 @@ qwz_stop(struct ifnet *ifp)
+ 	qwz_del_task(sc, sc->sc_nswq, &sc->newstate_task);
+ 	qwz_del_task(sc, systq, &sc->setkey_task);
+ 	qwz_del_task(sc, systq, &sc->ba_task);
++#ifdef QWZMAC
++	qwz_del_task(sc, systq, &sc->bgscan_task);
++#endif
+ 	refcnt_finalize(&sc->task_refs, "qwzstop");
+ 
+ 	qwz_setkey_clear(sc);
+@@ -1010,6 +1017,9 @@ qwz_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
+ 		qwz_del_task(sc, systq, &sc->ba_task);
+ 		qwz_del_task(sc, systq, &sc->setkey_task);
+ 		qwz_setkey_clear(sc);
++#ifdef QWZMAC
++		qwz_del_task(sc, systq, &sc->bgscan_task);
++#endif
+ #if 0
+ 		qwz_del_task(sc, systq, &sc->bgscan_done_task);
+ #endif
+@@ -1091,7 +1101,11 @@ qwz_newstate_task(void *arg)
+ 
+ 	case IEEE80211_S_SCAN:
+ next_scan:
++#ifdef QWZMAC
++		err = qwz_scan(sc, 0);
++#else
+ 		err = qwz_scan(sc);
++#endif
+ 		if (err)
+ 			break;
+ 		if (ifp->if_flags & IFF_DEBUG)
+@@ -20125,8 +20139,29 @@ qwz_hal_srng_setup(struct qwz_softc *sc, enum hal_ring_type type,
  		}
  	}
  
@@ -32,3 +76,109 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  
  	qwz_hal_srng_hw_init(sc, srng);
  
+@@ -24085,7 +24120,11 @@ qwz_start_scan(struct qwz_softc *sc, struct scan_req_params *arg)
+ #define ATH12K_MAC_SCAN_CMD_EVT_OVERHEAD		200 /* in msecs */
+ 
+ int
++#ifdef QWZMAC
++qwz_scan(struct qwz_softc *sc, int bgscan)
++#else
+ qwz_scan(struct qwz_softc *sc)
++#endif
+ {
+ 	struct ieee80211com *ic = &sc->sc_ic;
+ 	struct qwz_vif *arvif = &sc->sc_vif;
+@@ -24219,7 +24258,11 @@ qwz_scan(struct qwz_softc *sc)
+ #ifdef notyet
+ 		spin_unlock_bh(&ar->data_lock);
+ #endif
++#ifdef QWZMAC
++	} else if (!bgscan) {	/* keep the mode of the association */
++#else
+ 	} else {
++#endif
+ 		/*
+ 		 * The current mode might have been fixed during association.
+ 		 * Ensure all channels get scanned.
+@@ -24287,6 +24330,71 @@ qwz_scan_abort(struct qwz_softc *sc)
+ #endif
+ }
+ 
++#ifdef QWZMAC
++/*
++ * QWZMAC: background scan (scan while associated), as in qwx(4)
++ * (qwx_bgscan_task(), qwx_bgscan()); qwz has none, so net80211 never
++ * refreshes its view of the other APs once associated, and a Wi-Fi menu
++ * only ever lists what was heard before the join. The firmware scan is
++ * the same WMI scan as in SCAN state; it leaves the channel for a while
++ * and comes back, the association stays up.
++ */
++void
++qwz_bgscan_task(void *arg)
++{
++	struct qwz_softc *sc = arg;
++	struct ieee80211com *ic = &sc->sc_ic;
++
++	if (ic->ic_state == IEEE80211_S_RUN &&
++	    sc->scan.state == ATH12K_SCAN_IDLE &&
++	    !test_bit(ATH12K_FLAG_CRASH_FLUSH, sc->sc_flags))
++		qwz_scan(sc, 1);
++
++	refcnt_rele_wake(&sc->task_refs);
++}
++
++int
++qwz_bgscan(struct ieee80211com *ic)
++{
++	struct ifnet *ifp = &ic->ic_if;
++	struct qwz_softc *sc = ifp->if_softc;
++
++	qwz_add_task(sc, systq, &sc->bgscan_task);
++
++	return 0;
++}
++
++/*
++ * QWZMAC: the scan found a better AP. qwx(4) roams to it
++ * (qwx_bgscan_done_task(): drain the Tx queues, delete the keys, tear the
++ * old association down in firmware, ieee80211_node_switch_bss()); that is
++ * not ported yet, so stay with the current AP, as net80211 does when the
++ * scan picks the same AP again (ieee80211_end_scan()).
++ */
++void
++qwz_bgscan_done(struct ieee80211com *ic,
++    struct ieee80211_node_switch_bss_arg *arg, size_t arg_size)
++{
++	struct ieee80211_node *ni = ic->ic_bss;
++
++	free(arg, M_DEVBUF, arg_size);
++	if (ic->ic_bgscan_fail < IEEE80211_BGSCAN_FAIL_MAX) {
++		if (ic->ic_bgscan_fail <= 0)
++			ic->ic_bgscan_fail = 1;
++		else
++			ic->ic_bgscan_fail *= 2;
++	}
++	ic->ic_xflags &= ~IEEE80211_F_TX_MGMT_ONLY;
++	ic->ic_flags &= ~IEEE80211_F_BGSCAN;
++	if (ni->ni_flags & IEEE80211_NODE_VHT)
++		ieee80211_setmode(ic, IEEE80211_MODE_11AC);
++	else if (ni->ni_flags & IEEE80211_NODE_HT)
++		ieee80211_setmode(ic, IEEE80211_MODE_11N);
++	else
++		ieee80211_setmode(ic, ieee80211_node_abg_mode(ic, ni));
++}
++#endif
++
+ /*
+  * Find a pdev which corresponds to a given channel.
+  * This doesn't exactly match the semantics of the Linux driver
+@@ -25072,6 +25180,9 @@ qwz_attach(struct qwz_softc *sc)
+ 	task_set(&sc->newstate_task, qwz_newstate_task, sc);
+ 	task_set(&sc->setkey_task, qwz_setkey_task, sc);
+ 	task_set(&sc->ba_task, qwz_ba_task, sc);
++#ifdef QWZMAC
++	task_set(&sc->bgscan_task, qwz_bgscan_task, sc);
++#endif
+ 	timeout_set_proc(&sc->scan.timeout, qwz_scan_timeout, sc);
+ #if NBPFILTER > 0
+ 	qwz_radiotap_attach(sc);

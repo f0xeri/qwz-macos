@@ -143,6 +143,8 @@ qwzmac_if_link_state(struct ifnet *ifp)
 	qwzmac_spl_unlock();
 }
 
+typedef int (*qwzmac_ioctl_fn)(struct ifnet *, u_long, void *);
+
 static int
 qwzmac_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 {
@@ -153,11 +155,26 @@ qwzmac_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 }
 
 /*
+ * The same settings straight into net80211, past qwz_ioctl(): ENETRESET
+ * does not restart the firmware here; the caller rescans instead (see
+ * qwzmac_apply_live()). Called with ioctl_rwl and the spl lock held, as
+ * qwz_ioctl() would hold them.
+ */
+static int
+qwzmac_ioctl80211(struct ifnet *ifp, u_long cmd, void *data)
+{
+	int error = ieee80211_ioctl(ifp, cmd, (caddr_t)data);
+
+	return error == ENETRESET ? 0 : error;
+}
+
+/*
  * "ifconfig qwz0 nwid <ssid> wpakey <passphrase>": join exactly this SSID
  * with WPA2-PSK (CCMP). Setting nwid also turns auto-join off.
  */
 static int
-qwzmac_set_network(struct qwzmac_dev *qd, struct ifnet *ifp)
+qwzmac_set_network(struct qwzmac_dev *qd, struct ifnet *ifp,
+    qwzmac_ioctl_fn ioc)
 {
 	struct ieee80211_nwid nwid;
 	struct ieee80211_wpaparams wpa;
@@ -171,7 +188,7 @@ qwzmac_set_network(struct qwzmac_dev *qd, struct ifnet *ifp)
 	memset(&ifr, 0, sizeof(ifr));
 	strlcpy(ifr.ifr_name, ifp->if_xname, sizeof(ifr.ifr_name));
 	ifr.ifr_data = (caddr_t)&nwid;
-	if ((error = qwzmac_ioctl(ifp, SIOCS80211NWID, &ifr)) != 0)
+	if ((error = ioc(ifp, SIOCS80211NWID, &ifr)) != 0)
 		return error;
 
 	memset(&wpa, 0, sizeof(wpa));
@@ -181,14 +198,14 @@ qwzmac_set_network(struct qwzmac_dev *qd, struct ifnet *ifp)
 	wpa.i_akms = IEEE80211_WPA_AKM_PSK;
 	wpa.i_ciphers = IEEE80211_WPA_CIPHER_CCMP;
 	wpa.i_groupcipher = IEEE80211_WPA_CIPHER_CCMP;
-	if ((error = qwzmac_ioctl(ifp, SIOCS80211WPAPARMS, &wpa)) != 0)
+	if ((error = ioc(ifp, SIOCS80211WPAPARMS, &wpa)) != 0)
 		return error;
 
 	memset(&psk, 0, sizeof(psk));
 	strlcpy(psk.i_name, ifp->if_xname, sizeof(psk.i_name));
 	psk.i_enabled = 1;
 	memcpy(psk.i_psk, qd->psk, sizeof(psk.i_psk));
-	error = qwzmac_ioctl(ifp, SIOCS80211WPAPSK, &psk);
+	error = ioc(ifp, SIOCS80211WPAPSK, &psk);
 	explicit_bzero(&psk, sizeof(psk));
 	return error;
 }
@@ -214,7 +231,7 @@ qwzmac_up(struct qwzmac_dev *qd)
 	if (qd->have_net) {
 		char ssid[IEEE80211_NWID_LEN + 1];
 
-		error = qwzmac_set_network(qd, ifp);
+		error = qwzmac_set_network(qd, ifp, qwzmac_ioctl);
 		explicit_bzero(qd->psk, sizeof(qd->psk));
 		if (error) {
 			printf("QwzWifi: stage 3: network setup failed: %d\n",
@@ -781,11 +798,13 @@ qwzmac_qwz_wake(void *p)
 }
 
 /*
- * Management for a Wi-Fi app (HeliPort, via kext/QwzUserClient.cpp), done
- * the way ifconfig(8) would: "ifconfig qwz0 down; ifconfig qwz0 nwid X
- * wpakey Y; ifconfig qwz0 up". The interface goes down first so that
- * qwz_ioctl() restarts the firmware once, not after each of the
- * NWID/WPAPARMS/WPAPSK ioctls (each returns ENETRESET).
+ * Management for a Wi-Fi app (HeliPort, via kext/QwzUserClient.cpp).
+ * While the radio is on, a join or leave changes net80211's settings and
+ * rescans, without restarting the firmware (qwzmac_apply_live()). With the
+ * radio off it is done the way ifconfig(8) would: "ifconfig qwz0 nwid X
+ * wpakey Y; ifconfig qwz0 up", the settings first so that qwz_ioctl()
+ * loads the firmware once, not after each of the NWID/WPAPARMS/WPAPSK
+ * ioctls (each returns ENETRESET).
  * Called in the app's thread, without the spl lock; they block.
  */
 static int
@@ -812,20 +831,32 @@ qwzmac_ifflags(struct ifnet *ifp, int up)
 	return ifp->if_ioctl(ifp, SIOCSIFFLAGS, (caddr_t)&ifr);
 }
 
-/* "ifconfig qwz0 -nwid", plus the scan-only trick from qwzmac_up(). */
+/* "ifconfig qwz0 nwid <ssid>": it also turns WPA and WEP off. */
 static int
-qwzmac_scan_only(struct qwzmac_dev *qd, struct ifnet *ifp)
+qwzmac_set_nwid(struct ifnet *ifp, const uint8_t *ssid, size_t len,
+    qwzmac_ioctl_fn ioc)
 {
-	struct ieee80211com *ic = (struct ieee80211com *)ifp;
 	struct ieee80211_nwid nwid;
 	struct ifreq ifr;
-	int error;
 
 	memset(&nwid, 0, sizeof(nwid));
+	nwid.i_len = len;
+	memcpy(nwid.i_nwid, ssid, len);
 	memset(&ifr, 0, sizeof(ifr));
 	strlcpy(ifr.ifr_name, ifp->if_xname, sizeof(ifr.ifr_name));
 	ifr.ifr_data = (caddr_t)&nwid;
-	error = qwzmac_ioctl(ifp, SIOCS80211NWID, &ifr);
+	return ioc(ifp, SIOCS80211NWID, &ifr);
+}
+
+/* "ifconfig qwz0 -nwid", plus the scan-only trick from qwzmac_up(). */
+static int
+qwzmac_scan_only(struct qwzmac_dev *qd, struct ifnet *ifp,
+    qwzmac_ioctl_fn ioc)
+{
+	struct ieee80211com *ic = (struct ieee80211com *)ifp;
+	int error;
+
+	error = qwzmac_set_nwid(ifp, NULL, 0, ioc);
 	qwzmac_spl_lock();
 	memset(ic->ic_des_bssid, 0, IEEE80211_ADDR_LEN);
 	ic->ic_flags |= IEEE80211_F_DESBSSID;
@@ -834,14 +865,66 @@ qwzmac_scan_only(struct qwzmac_dev *qd, struct ifnet *ifp)
 	return error;
 }
 
+/* Join qd->ssid, WPA2-PSK with qd->psk if psk is set, else open. */
+static int
+qwzmac_set_join(struct qwzmac_dev *qd, struct ifnet *ifp, int psk,
+    qwzmac_ioctl_fn ioc)
+{
+	struct ieee80211com *ic = (struct ieee80211com *)ifp;
+
+	qwzmac_spl_lock();
+	ic->ic_flags &= ~IEEE80211_F_DESBSSID;	/* undo scan-only */
+	qwzmac_spl_unlock();
+	if (psk)
+		return qwzmac_set_network(qd, ifp, ioc);
+	return qwzmac_set_nwid(ifp, qd->ssid, qd->ssid_len, ioc);
+}
+
+/*
+ * Change the network while the interface is up and running, without the
+ * restart qwz_ioctl() does on ENETRESET (qwz_stop() and qwz_init(): the
+ * firmware is loaded again, ~2 s). The settings go to net80211 directly,
+ * then it rescans as after a beacon miss: qwz_newstate_task() takes
+ * RUN -> SCAN with qwz_run_stop() and qwz_deauth() (peer and keys gone
+ * from the firmware), and the end of the scan joins what the new settings
+ * select. From SCAN the running scan simply ends with the new settings.
+ * No deauth frame goes to the old AP (same as a beacon miss); it drops us
+ * after its inactivity timeout.
+ * Returns EAGAIN when the radio is off: the caller goes the ifconfig way.
+ */
+static int
+qwzmac_apply_live(struct qwzmac_dev *qd, struct ifnet *ifp, int leave,
+    int psk)
+{
+	struct qwz_softc *sc = ifp->if_softc;
+	struct ieee80211com *ic = &sc->sc_ic;
+	int error;
+
+	/* Same order as qwz_ioctl(): no qwz_init() can be running meanwhile. */
+	rw_enter_write(&sc->ioctl_rwl);
+	qwzmac_spl_lock();
+	if ((ifp->if_flags & (IFF_UP | IFF_RUNNING)) != (IFF_UP | IFF_RUNNING) ||
+	    ic->ic_state == IEEE80211_S_INIT) {
+		error = EAGAIN;
+		goto out;
+	}
+	if (leave)
+		error = qwzmac_scan_only(qd, ifp, qwzmac_ioctl80211);
+	else
+		error = qwzmac_set_join(qd, ifp, psk, qwzmac_ioctl80211);
+	if (error == 0)
+		ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
+out:
+	qwzmac_spl_unlock();
+	rw_exit(&sc->ioctl_rwl);
+	return error;
+}
+
 int
 qwzmac_qwz_join(void *p, struct qwzmac_network *net)
 {
 	struct qwzmac_dev *qd = p;
 	struct ifnet *ifp;
-	struct ieee80211com *ic;
-	struct ieee80211_nwid nwid;
-	struct ifreq ifr;
 	uint8_t psk[32];
 	size_t slen, plen;
 	int error;
@@ -863,43 +946,44 @@ qwzmac_qwz_join(void *p, struct qwzmac_network *net)
 		explicit_bzero(psk, sizeof(psk));
 		return EBUSY;
 	}
-	ic = &((struct qwz_softc *)qd->dev)->sc_ic;
-	ifp = &ic->ic_if;
+	ifp = &((struct qwz_softc *)qd->dev)->sc_ic.ic_if;
 
-	if ((error = qwzmac_ifflags(ifp, 0)) != 0)
-		goto out;
 	qwzmac_spl_lock();
-	ic->ic_flags &= ~IEEE80211_F_DESBSSID;	/* undo scan-only */
 	memcpy(qd->ssid, net->ssid, slen);
 	qd->ssid_len = slen;
-	qwzmac_spl_unlock();
-	if (plen != 0) {
+	if (plen != 0)
 		memcpy(qd->psk, psk, sizeof(qd->psk));
-		error = qwzmac_set_network(qd, ifp);
-		explicit_bzero(qd->psk, sizeof(qd->psk));
-	} else {
-		/* NWID alone: it also turns WPA and WEP off. */
-		memset(&nwid, 0, sizeof(nwid));
-		nwid.i_len = slen;
-		memcpy(nwid.i_nwid, net->ssid, slen);
-		memset(&ifr, 0, sizeof(ifr));
-		strlcpy(ifr.ifr_name, ifp->if_xname, sizeof(ifr.ifr_name));
-		ifr.ifr_data = (caddr_t)&nwid;
-		error = qwzmac_ioctl(ifp, SIOCS80211NWID, &ifr);
-	}
-	if (error) {
-		qwzmac_scan_only(qd, ifp);
-		qwzmac_ifflags(ifp, 1);
-		goto out;
-	}
-	qd->have_net = 1;
-	printf("QwzWifi: joining \"%.*s\" (%s), requested by an app\n",
-	    (int)slen, net->ssid, plen ? "WPA2-PSK" : "open");
-	error = qwzmac_ifflags(ifp, 1);
-out:
+	qwzmac_spl_unlock();
 	explicit_bzero(psk, sizeof(psk));
-	if (error)
+
+	error = qwzmac_apply_live(qd, ifp, 0, plen != 0);
+	if (error == 0) {
+		printf("QwzWifi: joining \"%.*s\" (%s), requested by an app, "
+		    "no firmware restart\n", (int)slen, net->ssid,
+		    plen ? "WPA2-PSK" : "open");
+	} else if (error == EAGAIN) {
+		/*
+		 * Radio off (or not running): the ifconfig way, down first so
+		 * that the settings do not each restart the firmware, then up
+		 * (one firmware load).
+		 */
+		if ((error = qwzmac_ifflags(ifp, 0)) == 0)
+			error = qwzmac_set_join(qd, ifp, plen != 0,
+			    qwzmac_ioctl);
+		if (error == 0) {
+			printf("QwzWifi: joining \"%.*s\" (%s), requested by an "
+			    "app\n", (int)slen, net->ssid,
+			    plen ? "WPA2-PSK" : "open");
+			error = qwzmac_ifflags(ifp, 1);
+		}
+	}
+	explicit_bzero(qd->psk, sizeof(qd->psk));
+	if (error) {
+		if (qwzmac_apply_live(qd, ifp, 1, 0) == EAGAIN)
+			qwzmac_scan_only(qd, ifp, qwzmac_ioctl);
 		printf("QwzWifi: join failed: %d\n", error);
+	} else
+		qd->have_net = 1;
 	return error;
 }
 
@@ -908,17 +992,17 @@ qwzmac_qwz_leave(void *p)
 {
 	struct qwzmac_dev *qd = p;
 	struct ifnet *ifp;
-	int error, up;
+	int error;
 
 	if (qwzmac_mgmt_busy(qd))
 		return EBUSY;
 	ifp = &((struct qwz_softc *)qd->dev)->sc_ic.ic_if;
-	up = (ifp->if_flags & IFF_UP) != 0;
-	if ((error = qwzmac_ifflags(ifp, 0)) != 0)
-		return error;
-	qwzmac_scan_only(qd, ifp);
-	printf("QwzWifi: network forgotten by an app, scanning only\n");
-	return up ? qwzmac_ifflags(ifp, 1) : 0;
+	error = qwzmac_apply_live(qd, ifp, 1, 0);
+	if (error == EAGAIN)	/* radio off: nothing to leave */
+		error = qwzmac_scan_only(qd, ifp, qwzmac_ioctl);
+	if (error == 0)
+		printf("QwzWifi: network forgotten by an app, scanning only\n");
+	return error;
 }
 
 int

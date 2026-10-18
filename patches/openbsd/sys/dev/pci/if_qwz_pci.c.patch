@@ -1,7 +1,19 @@
 diff --git a/sys/dev/pci/if_qwz_pci.c b/sys/dev/pci/if_qwz_pci.c
 --- a/sys/dev/pci/if_qwz_pci.c
 +++ b/sys/dev/pci/if_qwz_pci.c
-@@ -1439,6 +1439,16 @@ qwz_pcic_ext_irq_enable(struct qwz_softc *sc)
+@@ -1015,6 +1015,11 @@ qwz_pci_attach(struct device *parent, struct device *self, void *aux)
+ 	ic->ic_ampdu_rx_stop = qwz_ampdu_rx_stop;
+ 	ic->ic_ampdu_tx_start = qwz_ampdu_tx_start;
+ 	ic->ic_ampdu_tx_stop = NULL;
++#ifdef QWZMAC
++	/* Background scan, as qwx(4) does (qwz.c). */
++	ic->ic_bgscan_start = qwz_bgscan;
++	ic->ic_bgscan_done = qwz_bgscan_done;
++#endif
+ 	/*
+ 	 * We cannot read the MAC address without loading the
+ 	 * firmware from disk. Postpone until mountroot is done.
+@@ -1439,6 +1444,16 @@ qwz_pcic_ext_irq_enable(struct qwz_softc *sc)
  void
  qwz_pcic_ce_irq_enable(struct qwz_softc *sc, uint16_t ce_id)
  {
@@ -18,7 +30,7 @@ diff --git a/sys/dev/pci/if_qwz_pci.c b/sys/dev/pci/if_qwz_pci.c
  	/* In case of one MSI vector, we handle irq enable/disable in a
  	 * uniform way since we only have one irq
  	 */
-@@ -1452,6 +1462,9 @@ qwz_pcic_ce_irq_enable(struct qwz_softc *sc, uint16_t ce_id)
+@@ -1452,6 +1467,9 @@ qwz_pcic_ce_irq_enable(struct qwz_softc *sc, uint16_t ce_id)
  void
  qwz_pcic_ce_irq_disable(struct qwz_softc *sc, uint16_t ce_id)
  {
@@ -28,7 +40,7 @@ diff --git a/sys/dev/pci/if_qwz_pci.c b/sys/dev/pci/if_qwz_pci.c
  	/* In case of one MSI vector, we handle irq enable/disable in a
  	 * uniform way since we only have one irq
  	 */
-@@ -3562,11 +3575,13 @@ qwz_rddm_task(void *arg)
+@@ -3562,11 +3580,13 @@ qwz_rddm_task(void *arg)
  	int i, timeout;
  	const uint32_t msecs = 2000, retries = 1000;
  	uint8_t *rddm;
@@ -42,7 +54,7 @@ diff --git a/sys/dev/pci/if_qwz_pci.c b/sys/dev/pci/if_qwz_pci.c
  	int error = 0;
  
  	if (psc->rddm_data == NULL) {
-@@ -3598,6 +3613,9 @@ qwz_rddm_task(void *arg)
+@@ -3598,6 +3618,9 @@ qwz_rddm_task(void *arg)
  	}
  	DPRINTF("\n");
  
@@ -52,7 +64,7 @@ diff --git a/sys/dev/pci/if_qwz_pci.c b/sys/dev/pci/if_qwz_pci.c
  	DPRINTF("%s: sleeping for 30 seconds to allow userland to boot\n", __func__);
  	tsleep_nsec(&psc->rddm_data, 0, "qwzrddm", SEC_TO_NSEC(30));
  
-@@ -3639,6 +3657,7 @@ qwz_rddm_task(void *arg)
+@@ -3639,6 +3662,7 @@ qwz_rddm_task(void *arg)
  	if (error)
  		DPRINTF("%s: vn_close: error %d\n", __func__, error);
  	#endif
