@@ -165,7 +165,7 @@ cmd_join(io_connect_t con, const char *ssid)
 		return 1;
 	}
 	as.wpa_key.len = (unsigned)strlen(as.wpa_key.key);
-	printf("joining \"%s\" (the firmware restarts, ~2 s)...\n", ssid);
+	printf("joining \"%s\"...\n", ssid);
 	kr = set(con, HP_IOCTL_ASSOCIATE, &as, sizeof(as));
 	memset_s(&as, sizeof(as), 0, sizeof(as));
 	if (kr != KERN_SUCCESS) {
