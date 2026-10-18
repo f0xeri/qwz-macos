@@ -13,12 +13,17 @@ clone() { # url dir commit [sparse paths...]
   fi
   git -C $dir checkout -q $rev
 }
-# OpenBSD qwz(4) — the driver we port (ISC). 2026-10-16 snapshot.
-clone https://github.com/openbsd/src.git openbsd 9d744686b24f92bf6b45ab8178191c31ccb26da5 \
+# OpenBSD qwz(4) — the driver we port (ISC), at patches/openbsd/BASE. The build
+# uses the working copy ../openbsd/ (see scripts/patches.sh), not this clone;
+# the sparse checkout is what we read for reference.
+clone https://github.com/openbsd/src.git openbsd $(<../patches/openbsd/BASE) \
   '/sys/dev/ic/qwz*' '/sys/dev/pci/if_qwz*' '/sys/dev/ic/qwx*' '/sys/dev/pci/if_qwx*' '/sys/net80211/' \
   /share/man/man4/qwz.4 /sys/dev/pci/pcireg.h /sys/dev/pci/pcidevs.h \
   '/sys/crypto/' /sys/net/if.h /sys/net/if_var.h /sys/net/if_media.h /sys/net/if_media.c \
-  /sys/net/if_dl.h /sys/net/if_llc.h /sys/net/if_ethersubr.c /sys/netinet/ip.h /sys/netinet/ip6.h
+  /sys/net/if_dl.h /sys/net/if_llc.h /sys/net/if_ethersubr.c /sys/netinet/ip.h /sys/netinet/ip6.h \
+  /sys/sys/syslog.h /sys/sys/sysctl.h /sys/kern/subr_tree.c /sys/net/if.c /sys/dev/pci/pci.c \
+  /sys/kern/subr_autoconf.c /sys/arch/amd64/amd64/machdep.c /sys/arch/amd64/pci/pci_machdep.c \
+  /sys/dev/acpi/acpi.c /sys/dev/acpi/acpi_x86.c
 # itlwm — macOS wrapper + itl80211 (old OpenBSD net80211 port) (GPL-2.0)
 clone https://github.com/OpenIntelWireless/itlwm.git itlwm 53c51c2cdd6e4b69beb91f310d74c53422b0f8bd
 # Kernel headers for building on any machine (acidanthera)
@@ -37,4 +42,7 @@ for f in amss.bin m3.bin board-2.bin Notice.txt; do
   [[ -f $f ]] || curl -fL -o $f "$FW/$f"
 done
 shasum -a 256 *
+cd ..
+# Our working copy of the OpenBSD sources: BASE + patches/openbsd/*.patch.
+[[ -d openbsd ]] && echo "skip openbsd/ (scripts/patches.sh check)" || scripts/patches.sh apply
 echo "done"

@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: f0xeri <9pik.official@gmail.com>
+Date: Sun, 18 Oct 2026 04:43:06 -0700
+Subject: [PATCH] qwz: keep msi_ce_irqmask up to date in one-MSI mode
+
+qwz_pcic_ce_irq_enable()/_disable() return early in one-MSI mode before
+updating sc->msi_ce_irqmask, but qwz_ce_intr() ignores copy engines
+whose bit is not set in it in both modes. With a single MSI vector (all
+macOS gives us: IOPCIFamily has no multi-message MSI and the chip has no
+MSI-X) every copy engine interrupt is then treated as unexpected: the
+HTC control response arrives only through the polling fallback and the
+HTT service connect times out, so the device never comes up. Update the
+mask before the one-MSI early return.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sys/dev/pci/if_qwz_pci.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/sys/dev/pci/if_qwz_pci.c b/sys/dev/pci/if_qwz_pci.c
+index 8ce128ef3cac18173de887ac3e43f190ba438edf..432bbdd3d2afda81f717973c48c917a736dad285 100644
+--- a/sys/dev/pci/if_qwz_pci.c
++++ b/sys/dev/pci/if_qwz_pci.c
+@@ -1439,6 +1439,9 @@ qwz_pcic_ext_irq_enable(struct qwz_softc *sc)
+ void
+ qwz_pcic_ce_irq_enable(struct qwz_softc *sc, uint16_t ce_id)
+ {
++#ifdef QWZMAC /* QWZMAC: qwz_ce_intr() checks the mask in one-MSI mode too */
++	sc->msi_ce_irqmask |= (1U << ce_id);
++#endif
+ 	/* In case of one MSI vector, we handle irq enable/disable in a
+ 	 * uniform way since we only have one irq
+ 	 */
+@@ -1452,6 +1455,9 @@ qwz_pcic_ce_irq_enable(struct qwz_softc *sc, uint16_t ce_id)
+ void
+ qwz_pcic_ce_irq_disable(struct qwz_softc *sc, uint16_t ce_id)
+ {
++#ifdef QWZMAC /* QWZMAC: qwz_ce_intr() checks the mask in one-MSI mode too */
++	sc->msi_ce_irqmask &= ~(1U << ce_id);
++#endif
+ 	/* In case of one MSI vector, we handle irq enable/disable in a
+ 	 * uniform way since we only have one irq
+ 	 */

@@ -3,8 +3,8 @@
 # Proven pattern: same flags built XHCIProbe.kext on this machine.
 #
 # Two worlds are compiled separately:
-#  - OpenBSD side (qwz/*.c, compat/*.c): C, freestanding, only compat/include
-#    and clang's own headers, never Apple headers;
+#  - OpenBSD side (openbsd/sys/**/*.c, compat/*.c): C, freestanding, only
+#    compat/include, openbsd/sys and clang's own headers, never Apple headers;
 #  - macOS side (kext/*.cpp): C++ against Kernel.framework.
 set -e
 cd "${0:A:h}/.."
@@ -14,6 +14,10 @@ KH="$SDK/System/Library/Frameworks/Kernel.framework/Headers"
 for f in amss.bin m3.bin board-2.bin; do
   [[ -f firmware/$f ]] || { echo "firmware/$f missing: run scripts/fetch-sources.sh"; exit 1; }
 done
+# openbsd/ is OpenBSD + patches/openbsd (scripts/patches.sh); warn if it and
+# the patches have drifted apart, so a build never silently uses stale code.
+[[ -d openbsd/.git ]] || { echo "openbsd/ missing: run scripts/patches.sh apply"; exit 1; }
+scripts/patches.sh check || echo "WARNING: building openbsd/ as it is, which differs from patches/openbsd"
 RD=$(clang -print-resource-dir)
 OUT=build; mkdir -p $OUT/obj
 ARCH=(-arch x86_64 -mmacosx-version-min=11.0)
@@ -22,11 +26,11 @@ COMMON=($ARCH -mkernel -fno-builtin -fno-common -O2 -Wall
 # IOPCIDevice/IONetworking/mbuf KPIs are marked deprecated in favour of DriverKit; still public.
 CXXFLAGS=(-std=gnu++17 -fapple-kext -fno-rtti -fno-exceptions -Wno-deprecated-declarations)
 BSDFLAGS=($ARCH -x c -std=gnu11 -mkernel -ffreestanding -fno-builtin -fno-common -O2
-          -nostdinc -isystem "$RD/include" -D_KERNEL -DQWZMAC -DQWZ_DEBUG -I compat/include -I .
+          -nostdinc -isystem "$RD/include" -D_KERNEL -DQWZMAC -DQWZ_DEBUG -I compat/include -I openbsd/sys
           -Wall -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable
           -Wno-sign-conversion -Wno-shorten-64-to-32 -Wno-implicit-int-conversion -Wno-pointer-sign)
 OBJS=()
-for src in qwz/*.c compat/*.c net80211/*.c crypto/*.c; do
+for src in openbsd/sys/**/*.c compat/*.c; do
   o=$OUT/obj/bsd_${src:h:t}_${src:t:r}.o; clang "${BSDFLAGS[@]}" -c $src -o $o; OBJS+=$o
 done
 for src in kext/*.cpp; do

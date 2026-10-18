@@ -4,3 +4,4 @@ firmware/
 *.o
 .DS_Store
 config/wifi.plist
+/openbsd/
