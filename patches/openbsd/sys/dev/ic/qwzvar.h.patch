@@ -1,18 +1,24 @@
 diff --git a/sys/dev/ic/qwzvar.h b/sys/dev/ic/qwzvar.h
 --- a/sys/dev/ic/qwzvar.h
 +++ b/sys/dev/ic/qwzvar.h
-@@ -2008,6 +2008,10 @@ struct qwz_softc {
+@@ -2008,6 +2008,16 @@ struct qwz_softc {
  	/* Task for firmware BlockAck setup/teardown and its arguments. */
  	struct task		ba_task;
  	struct qwz_ba_task_data	ba_rx;
 +#ifdef QWZMAC
 +	/* Background scan, as in qwx(4) (qwz_bgscan()). */
 +	struct task		bgscan_task;
++	/*
++	 * Country of the firmware's last regulatory channel list, for macOS's
++	 * Wi-Fi stack to read (qwzmac_qwz_country()). Only reported; nothing
++	 * sets the country from it.
++	 */
++	char			qwzmac_alpha2[REG_ALPHA2_LEN + 1];
 +#endif
  
  	enum ath12k_11d_state	state_11d;
  	int			completed_11d_scan;
-@@ -2180,6 +2184,11 @@ void	qwz_stop(struct ifnet *);
+@@ -2180,6 +2190,11 @@ void	qwz_stop(struct ifnet *);
  void	qwz_watchdog(struct ifnet *);
  void	qwz_init_task(void *);
  int	qwz_newstate(struct ieee80211com *, enum ieee80211_state, int);

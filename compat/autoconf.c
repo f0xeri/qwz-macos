@@ -258,6 +258,24 @@ qwzmac_up(struct qwzmac_dev *qd)
 		    "(scan only, networks are listed after each scan)\n");
 }
 
+/* Tell the kext the radio's state (qwzmac_netif_ops.radio). */
+static void
+qwzmac_radio(struct qwzmac_dev *qd, int state)
+{
+	qwzmac_spl_lock();
+	if (qd->ops.radio != NULL)
+		qd->ops.radio(qd->ops.cookie, state);
+	qwzmac_spl_unlock();
+}
+
+/* The state after a bring-up: up if the interface is up and running. */
+static void
+qwzmac_radio_now(struct qwzmac_dev *qd)
+{
+	qwzmac_radio(qd, qwzmac_qwz_power(qd) ? QWZMAC_RADIO_UP :
+	    QWZMAC_RADIO_DOWN);
+}
+
 static void
 mountroot_thread(void *arg)
 {
@@ -275,6 +293,7 @@ mountroot_thread(void *arg)
 		if (qd->ops.ready != NULL)
 			qd->ops.ready(qd->ops.cookie, sc->sc_ic.ic_myaddr);
 		qwzmac_up(qd);
+		qwzmac_radio_now(qd);
 	}
 
 	qwzmac_spl_lock();
@@ -577,6 +596,7 @@ qwzmac_qwz_disconnect(void *p)
 	qwzmac_spl_lock();
 	qd->ops.input = NULL;
 	qd->ops.link = NULL;
+	qd->ops.radio = NULL;
 	qwzmac_spl_unlock();
 }
 
@@ -741,6 +761,7 @@ qwzmac_qwz_sleep(void *p)
 		printf("QwzWifi: sleep: bring-up still running, chip left as is\n");
 		return;
 	}
+	qwzmac_radio(qd, QWZMAC_RADIO_GOING_DOWN);
 	done = qwzmac_activate_bounded(qd, DVACT_QUIESCE);
 	if (done)
 		qwz_activate(qd->dev, DVACT_SUSPEND);
@@ -748,6 +769,7 @@ qwzmac_qwz_sleep(void *p)
 		/* Hung: at least keep it from writing into RAM while we sleep. */
 		pci_bus_master_off(qd->pc);
 	qwzmac_suspended = done ? 1 : -1;
+	qwzmac_radio(qd, QWZMAC_RADIO_DOWN);
 	printf("QwzWifi: sleep: chip %s\n", done ? "powered down" :
 	    "did not power down in time, bus mastering off");
 }
@@ -771,8 +793,9 @@ qwzmac_wake_thread(void *arg)
 		return;
 	}
 	qwz_activate(qd->dev, DVACT_RESUME);
-	qwz_activate(qd->dev, DVACT_WAKEUP);
+	qwz_activate(qd->dev, DVACT_WAKEUP);	/* qwz_init(): firmware up */
 	printf("QwzWifi: wake: chip up again\n");
+	qwzmac_radio_now(qd);
 }
 
 void
@@ -1010,12 +1033,17 @@ qwzmac_qwz_set_power(void *p, int on)
 {
 	struct qwzmac_dev *qd = p;
 	struct ifnet *ifp;
+	int error;
 
 	if (qwzmac_mgmt_busy(qd))
 		return EBUSY;
 	ifp = &((struct qwz_softc *)qd->dev)->sc_ic.ic_if;
 	printf("QwzWifi: radio turned %s by an app\n", on ? "on" : "off");
-	return qwzmac_ifflags(ifp, on);
+	if (!on)
+		qwzmac_radio(qd, QWZMAC_RADIO_GOING_DOWN);
+	error = qwzmac_ifflags(ifp, on);
+	qwzmac_radio_now(qd);
+	return error;
 }
 
 int
@@ -1147,4 +1175,61 @@ qwzmac_qwz_scan_results(void *p, struct qwzmac_bss *out, int max)
 	}
 	qwzmac_spl_unlock();
 	return n;
+}
+
+int
+qwzmac_qwz_channels(void *p, struct qwzmac_chan *out, int max)
+{
+	struct qwzmac_dev *qd = p;
+	struct ieee80211com *ic;
+	struct ieee80211_channel *c;
+	struct qwzmac_chan *o;
+	int i, n = 0;
+
+	if (qd == NULL || !qd->attached)
+		return 0;
+	ic = &((struct qwz_softc *)qd->dev)->sc_ic;
+
+	qwzmac_spl_lock();
+	for (i = 1; i <= IEEE80211_CHAN_MAX && n < max; i++) {
+		c = &ic->ic_channels[i];
+		if (c->ic_flags == 0 || !isset(ic->ic_chan_active, i))
+			continue;
+		o = &out[n++];
+		o->channel = i;
+		o->freq_mhz = c->ic_freq;
+		o->flags = 0;
+		if (IEEE80211_IS_CHAN_2GHZ(c))
+			o->flags |= QWZMAC_CHAN_2GHZ;
+		if (IEEE80211_IS_CHAN_5GHZ(c))
+			o->flags |= QWZMAC_CHAN_5GHZ;
+		if (c->ic_flags & IEEE80211_CHAN_PASSIVE)
+			o->flags |= QWZMAC_CHAN_PASSIVE;
+		if (IEEE80211_CHAN_40MHZ_ALLOWED(c))
+			o->flags |= QWZMAC_CHAN_40MHZ;
+		if (IEEE80211_CHAN_80MHZ_ALLOWED(c))
+			o->flags |= QWZMAC_CHAN_80MHZ;
+	}
+	qwzmac_spl_unlock();
+	return n;
+}
+
+int
+qwzmac_qwz_country(void *p, char cc[3])
+{
+	struct qwzmac_dev *qd = p;
+	struct qwz_softc *sc;
+	int error = 0;
+
+	cc[0] = cc[1] = cc[2] = '\0';
+	if (qd == NULL || !qd->attached)
+		return ENXIO;
+	sc = (struct qwz_softc *)qd->dev;
+	qwzmac_spl_lock();
+	if (sc->qwzmac_alpha2[0] == '\0')
+		error = ENXIO;
+	else
+		memcpy(cc, sc->qwzmac_alpha2, 2);
+	qwzmac_spl_unlock();
+	return error;
 }

@@ -9,6 +9,8 @@
  * macOS mbufs and OpenBSD mbufs in compat/autoconf.c.
  * Stage 4: sleep/wake, packet counters, the link speed follows the TX rate.
  * HeliPort (itlwm's menu app) can pick the network: kext/QwzUserClient.cpp.
+ * Native Wi-Fi: the separate QwzAirport.kext (airport/) connects through
+ * callPlatformFunction() and kext/airport_api.h.
  *
  * Boot-args:
  *   -qwzon     required, otherwise the driver does not attach at all
@@ -222,9 +224,20 @@ QwzWifi::start(IOService *provider)
 	fNetStats = nullptr;
 	fClientCalls = 0;
 	bzero(fMac, sizeof(fMac));
+	bzero(&fFront, sizeof(fFront));
+	fFrontOn = false;
+	fFrontCalls = 0;
+	fFrontTc = nullptr;
+	fRadioHead = fRadioTail = 0;
 	fIfLock = IOLockAlloc();
 	if (fIfLock == nullptr)
 		return false;
+	fRadioLock = IOSimpleLockAlloc();
+	if (fRadioLock == nullptr) {
+		IOLockFree(fIfLock);
+		fIfLock = nullptr;
+		return false;
+	}
 
 	IOPCIDevice *pci = OSDynamicCast(IOPCIDevice, provider);
 	if (!pci) {
@@ -254,7 +267,8 @@ QwzWifi::start(IOService *provider)
 		return false;
 	}
 	fLinkTc = thread_call_allocate(linkTc, this);
-	if (fLinkTc == nullptr) {
+	fFrontTc = thread_call_allocate(frontTc, this);
+	if (fLinkTc == nullptr || fFrontTc == nullptr) {
 		qwzmac_log_stop();
 		return false;
 	}
@@ -290,6 +304,7 @@ QwzWifi::start(IOService *provider)
 	ops.ready = netReady;
 	ops.input = netInput;
 	ops.link = netLink;
+	ops.radio = netRadio;
 
 	QLOG("stage 1: attaching qwz (debug mask 0x%x)", (unsigned)mask);
 	error = qwzmac_qwz_attach(pci, &ops, have_net ? &net : nullptr, &fQwz);
@@ -639,6 +654,232 @@ QwzWifi::newModelString() const
 	return OSString::withCString("WCN7850 Wi-Fi (qwz)");
 }
 
+/*
+ * QwzAirport (kext/airport_api.h). It connects once its controller is
+ * started and disconnects in its stop(). Its calls into qwz go through
+ * clientEnter()/clientExit(), like QwzUserClient's, so stop() waits for
+ * them; events go out from frontTc(), so qwz's lock is never held while the
+ * front runs.
+ */
+IOReturn
+QwzWifi::callPlatformFunction(const OSSymbol *name, bool wait, void *p1,
+    void *p2, void *p3, void *p4)
+{
+	if (name != nullptr && name->isEqualTo(QWZ_AIRPORT_CONNECT))
+		return frontConnect((const qwz_airport_front *)p1,
+		    (qwz_airport_driver *)p2);
+	if (name != nullptr && name->isEqualTo(QWZ_AIRPORT_DISCONNECT))
+		return frontDisconnect(p1);
+	return IOEthernetController::callPlatformFunction(name, wait, p1, p2,
+	    p3, p4);
+}
+
+IOReturn
+QwzWifi::frontConnect(const qwz_airport_front *front, qwz_airport_driver *driver)
+{
+	if (front == nullptr || driver == nullptr || front->event == nullptr ||
+	    front->version != QWZ_AIRPORT_API_VERSION ||
+	    front->size != sizeof(*front) ||
+	    driver->version != QWZ_AIRPORT_API_VERSION ||
+	    driver->size != sizeof(*driver)) {
+		QLOG("airport: connect refused: API version %u, ours %u",
+		    front != nullptr ? (unsigned)front->version : 0,
+		    (unsigned)QWZ_AIRPORT_API_VERSION);
+		return kIOReturnBadArgument;
+	}
+	if (fQwz == nullptr || fFrontTc == nullptr)
+		return kIOReturnNotReady;	/* -qwzprobe */
+	IOLockLock(fIfLock);
+	if (fStopping || fFrontOn) {
+		IOLockUnlock(fIfLock);
+		return fStopping ? kIOReturnNotReady : kIOReturnBusy;
+	}
+	fFront = *front;
+	fFrontOn = true;
+	IOLockUnlock(fIfLock);
+
+	driver->dev = this;
+	driver->power = dvPower;
+	driver->set_power = dvSetPower;
+	driver->hw_address = dvHwAddress;
+	driver->fw_version = dvFwVersion;
+	driver->country = dvCountry;
+	driver->channels = dvChannels;
+	driver->sta_info = dvStaInfo;
+	QLOG("airport: native Wi-Fi front connected");
+	/* Tell it where the radio is now; later changes come from netRadio(). */
+	frontQueue(qwzmac_qwz_power(fQwz) ? QWZMAC_RADIO_UP : QWZMAC_RADIO_DOWN);
+	return kIOReturnSuccess;
+}
+
+IOReturn
+QwzWifi::frontDisconnect(void *cookie)
+{
+	IOLockLock(fIfLock);
+	if (!fFrontOn || fFront.cookie != cookie) {
+		IOLockUnlock(fIfLock);
+		return kIOReturnNotOpen;
+	}
+	fFrontOn = false;
+	while (fFrontCalls > 0)
+		IOLockSleep(fIfLock, &fFrontCalls, THREAD_UNINT);
+	bzero(&fFront, sizeof(fFront));
+	IOLockUnlock(fIfLock);
+	QLOG("airport: native Wi-Fi front disconnected");
+	return kIOReturnSuccess;
+}
+
+/* Any context, also under qwz's lock: queue a radio state for the front. */
+void
+QwzWifi::frontQueue(int state)
+{
+	IOSimpleLockLock(fRadioLock);
+	if (fRadioTail - fRadioHead == QWZ_RADIO_QLEN)
+		fRadioHead++;	/* full: drop the oldest */
+	fRadioQ[fRadioTail++ % QWZ_RADIO_QLEN] = state;
+	IOSimpleLockUnlock(fRadioLock);
+	thread_call_enter(fFrontTc);
+}
+
+/* qwz context, spl lock held. */
+void
+QwzWifi::netRadio(void *cookie, int state)
+{
+	QwzWifi *me = (QwzWifi *)cookie;
+
+	me->frontQueue(state);
+}
+
+/* Thread call: hand queued radio states to the front, in order. */
+void
+QwzWifi::frontTc(thread_call_param_t p0, thread_call_param_t p1)
+{
+	QwzWifi *me = (QwzWifi *)p0;
+	qwz_airport_front front;
+	int state;
+
+	(void)p1;
+	for (;;) {
+		IOSimpleLockLock(me->fRadioLock);
+		if (me->fRadioHead == me->fRadioTail) {
+			IOSimpleLockUnlock(me->fRadioLock);
+			return;
+		}
+		state = me->fRadioQ[me->fRadioHead++ % QWZ_RADIO_QLEN];
+		IOSimpleLockUnlock(me->fRadioLock);
+
+		IOLockLock(me->fIfLock);
+		if (!me->fFrontOn || me->fStopping) {
+			IOLockUnlock(me->fIfLock);
+			continue;
+		}
+		front = me->fFront;
+		me->fFrontCalls++;
+		IOLockUnlock(me->fIfLock);
+		front.event(front.cookie, QWZ_AIRPORT_EV_RADIO, &state,
+		    sizeof(state));
+		IOLockLock(me->fIfLock);
+		if (--me->fFrontCalls == 0)
+			IOLockWakeup(me->fIfLock, &me->fFrontCalls, false);
+		IOLockUnlock(me->fIfLock);
+	}
+}
+
+int
+QwzWifi::dvPower(void *dev)
+{
+	QwzWifi *me = (QwzWifi *)dev;
+	int on;
+
+	if (!me->clientEnter())
+		return 0;
+	on = qwzmac_qwz_power(me->fQwz);
+	me->clientExit();
+	return on;
+}
+
+int
+QwzWifi::dvSetPower(void *dev, int on)
+{
+	QwzWifi *me = (QwzWifi *)dev;
+	int error;
+
+	if (!me->clientEnter())
+		return ENXIO;
+	error = qwzmac_qwz_set_power(me->fQwz, on);
+	me->clientExit();
+	return error;
+}
+
+int
+QwzWifi::dvHwAddress(void *dev, uint8_t mac[6])
+{
+	QwzWifi *me = (QwzWifi *)dev;
+	uint8_t any = 0;
+
+	for (unsigned i = 0; i < sizeof(me->fMac); i++)
+		any |= me->fMac[i];
+	if (!any)
+		return ENXIO;	/* before netReady() */
+	bcopy(me->fMac, mac, sizeof(me->fMac));
+	return 0;
+}
+
+void
+QwzWifi::dvFwVersion(void *dev, char *buf, size_t len)
+{
+	QwzWifi *me = (QwzWifi *)dev;
+
+	if (len > 0)
+		buf[0] = '\0';
+	if (!me->clientEnter())
+		return;
+	qwzmac_qwz_fw_version(me->fQwz, buf, len);
+	me->clientExit();
+}
+
+int
+QwzWifi::dvCountry(void *dev, char cc[3])
+{
+	QwzWifi *me = (QwzWifi *)dev;
+	int error;
+
+	cc[0] = '\0';
+	if (!me->clientEnter())
+		return ENXIO;
+	error = qwzmac_qwz_country(me->fQwz, cc);
+	me->clientExit();
+	return error;
+}
+
+int
+QwzWifi::dvChannels(void *dev, qwzmac_chan *out, int max)
+{
+	QwzWifi *me = (QwzWifi *)dev;
+	int n;
+
+	if (!me->clientEnter())
+		return 0;
+	n = qwzmac_qwz_channels(me->fQwz, out, max);
+	me->clientExit();
+	return n;
+}
+
+int
+QwzWifi::dvStaInfo(void *dev, qwzmac_sta_info *si)
+{
+	QwzWifi *me = (QwzWifi *)dev;
+	int error;
+
+	if (!me->clientEnter()) {
+		bzero(si, sizeof(*si));
+		return ENXIO;
+	}
+	error = qwzmac_qwz_sta_info(me->fQwz, si);
+	me->clientExit();
+	return error;
+}
+
 void
 QwzWifi::stop(IOService *provider)
 {
@@ -664,6 +905,24 @@ QwzWifi::stop(IOService *provider)
 			thread_call_cancel(fLinkTc);
 			IOSleep(5);
 		}
+	}
+	/*
+	 * QwzAirport is our client, so IOKit stopped it (and it disconnected)
+	 * before this; drop it anyway, then wait for frontTc(). No netRadio()
+	 * any more since qwzmac_qwz_disconnect().
+	 */
+	IOLockLock(fIfLock);
+	fFrontOn = false;
+	while (fFrontCalls > 0)
+		IOLockSleep(fIfLock, &fFrontCalls, THREAD_UNINT);
+	IOLockUnlock(fIfLock);
+	if (fFrontTc != nullptr) {
+		while (thread_call_isactive(fFrontTc)) {
+			thread_call_cancel(fFrontTc);
+			IOSleep(5);
+		}
+		thread_call_free(fFrontTc);
+		fFrontTc = nullptr;
 	}
 	if (netif != nullptr) {
 		detachInterface(netif, true);
@@ -697,4 +956,6 @@ QwzWifi::stop(IOService *provider)
 	}
 	IOLockFree(fIfLock);
 	fIfLock = nullptr;
+	IOSimpleLockFree(fRadioLock);
+	fRadioLock = nullptr;
 }

@@ -45,7 +45,19 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  		if (err)
  			break;
  		if (ifp->if_flags & IFF_DEBUG)
-@@ -20125,8 +20139,29 @@ qwz_hal_srng_setup(struct qwz_softc *sc, enum hal_ring_type type,
+@@ -11246,6 +11260,11 @@ qwz_reg_chan_list_event(struct qwz_softc *sc, struct mbuf *m,
+ 	}
+ 
+ 	qwz_init_channels(sc, reg_info);
++#ifdef QWZMAC
++	/* Kept for qwzmac_qwz_country(): ath12k keeps it in its regd. */
++	memcpy(sc->qwzmac_alpha2, reg_info->alpha2, REG_ALPHA2_LEN);
++	sc->qwzmac_alpha2[REG_ALPHA2_LEN] = '\0';
++#endif
+ #if 0
+ 	pdev_idx = reg_info->phy_id;
+ 
+@@ -20125,8 +20144,29 @@ qwz_hal_srng_setup(struct qwz_softc *sc, enum hal_ring_type type,
  		}
  	}
  
@@ -76,7 +88,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  
  	qwz_hal_srng_hw_init(sc, srng);
  
-@@ -24085,7 +24120,11 @@ qwz_start_scan(struct qwz_softc *sc, struct scan_req_params *arg)
+@@ -24085,7 +24125,11 @@ qwz_start_scan(struct qwz_softc *sc, struct scan_req_params *arg)
  #define ATH12K_MAC_SCAN_CMD_EVT_OVERHEAD		200 /* in msecs */
  
  int
@@ -88,7 +100,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  {
  	struct ieee80211com *ic = &sc->sc_ic;
  	struct qwz_vif *arvif = &sc->sc_vif;
-@@ -24219,7 +24258,11 @@ qwz_scan(struct qwz_softc *sc)
+@@ -24219,7 +24263,11 @@ qwz_scan(struct qwz_softc *sc)
  #ifdef notyet
  		spin_unlock_bh(&ar->data_lock);
  #endif
@@ -100,7 +112,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  		/*
  		 * The current mode might have been fixed during association.
  		 * Ensure all channels get scanned.
-@@ -24287,6 +24330,71 @@ qwz_scan_abort(struct qwz_softc *sc)
+@@ -24287,6 +24335,71 @@ qwz_scan_abort(struct qwz_softc *sc)
  #endif
  }
  
@@ -172,7 +184,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  /*
   * Find a pdev which corresponds to a given channel.
   * This doesn't exactly match the semantics of the Linux driver
-@@ -25072,6 +25180,9 @@ qwz_attach(struct qwz_softc *sc)
+@@ -25072,6 +25185,9 @@ qwz_attach(struct qwz_softc *sc)
  	task_set(&sc->newstate_task, qwz_newstate_task, sc);
  	task_set(&sc->setkey_task, qwz_setkey_task, sc);
  	task_set(&sc->ba_task, qwz_ba_task, sc);

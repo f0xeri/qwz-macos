@@ -17,10 +17,11 @@
 
 #include "../compat/include/qwzmac/os.h"
 #include "../compat/include/qwzmac/attach.h"
+#include "airport_api.h"
 
 #define QLOG(fmt, ...) qwzmac_log("QwzWifi: " fmt "\n", ##__VA_ARGS__)
 
-#define QWZ_VERSION	"0.0.6"
+#define QWZ_VERSION	"0.0.8"
 
 class QwzWifi : public IOEthernetController {
 	OSDeclareDefaultStructors(QwzWifi)
@@ -42,6 +43,10 @@ public:
 	IOReturn selectMedium(const IONetworkMedium *medium) override;
 	const OSString *newVendorString() const override;
 	const OSString *newModelString() const override;
+	/* QwzAirport connects through this (kext/airport_api.h). */
+	using IOService::callPlatformFunction;
+	IOReturn callPlatformFunction(const OSSymbol *name, bool wait,
+	    void *p1, void *p2, void *p3, void *p4) override;
 
 	/*
 	 * For QwzUserClient: calls into qwz go between clientEnter() and
@@ -67,6 +72,20 @@ private:
 	static void netLink(void *cookie, int up, uint64_t baudrate);
 	static void linkTc(thread_call_param_t p0, thread_call_param_t p1);
 	void countStat(UInt32 IONetworkStats::*field);
+	/* QwzAirport (kext/airport_api.h) */
+	IOReturn frontConnect(const qwz_airport_front *front,
+	    qwz_airport_driver *driver);
+	IOReturn frontDisconnect(void *cookie);
+	void frontQueue(int state);
+	static void netRadio(void *cookie, int state);
+	static void frontTc(thread_call_param_t p0, thread_call_param_t p1);
+	static int dvPower(void *dev);
+	static int dvSetPower(void *dev, int on);
+	static int dvHwAddress(void *dev, uint8_t mac[6]);
+	static void dvFwVersion(void *dev, char *buf, size_t len);
+	static int dvCountry(void *dev, char cc[3]);
+	static int dvChannels(void *dev, qwzmac_chan *out, int max);
+	static int dvStaInfo(void *dev, qwzmac_sta_info *si);
 
 	IOPCIDevice	*fPci;
 	void		*fQwz;
@@ -86,6 +105,16 @@ private:
 	volatile uint64_t fLinkBaudrate; /* net80211's if_baudrate at link up */
 	IONetworkStats	*fNetStats;	/* netstat's packet and error counters */
 	int		 fClientCalls;	/* fIfLock; QwzUserClient calls in progress */
+
+	/* QwzAirport: the front, under fIfLock; events go out in frontTc(). */
+	qwz_airport_front fFront;
+	bool		 fFrontOn;
+	int		 fFrontCalls;	/* fIfLock; front->event() calls running */
+	thread_call_t	 fFrontTc;
+	IOSimpleLock	*fRadioLock;	/* the queue below; taken under qwz's lock */
+#define QWZ_RADIO_QLEN	8
+	int		 fRadioQ[QWZ_RADIO_QLEN];
+	unsigned	 fRadioHead, fRadioTail;
 };
 
 #endif /* QWZ_QWZWIFI_H */

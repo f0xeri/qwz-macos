@@ -26,6 +26,7 @@ struct qwzmac_network {
 /*
  * Callbacks into the kext. All may be called with the spl lock held,
  * except ready(), which runs in the bring-up thread without it.
+ * qwzmac_qwz_disconnect() stops all but ready().
  */
 struct qwzmac_netif_ops {
 	void	*cookie;
@@ -35,7 +36,16 @@ struct qwzmac_netif_ops {
 	void	(*input)(void *cookie, const void *frame, size_t len);
 	/* Link went up (associated, keys installed) or down. */
 	void	(*link)(void *cookie, int up, uint64_t baudrate);
+	/*
+	 * The radio is about to go down, went down, or is up and running
+	 * (QWZMAC_RADIO_*): after bring-up, around sleep and wake, and around
+	 * qwzmac_qwz_set_power(). Optional; called with the spl lock held.
+	 */
+	void	(*radio)(void *cookie, int state);
 };
+#define QWZMAC_RADIO_DOWN	0
+#define QWZMAC_RADIO_UP		1
+#define QWZMAC_RADIO_GOING_DOWN	2
 
 /*
  * Match and attach qwz to the IOPCIDevice. Returns 0 and an opaque device
@@ -135,6 +145,25 @@ struct qwzmac_bss {
 };
 /* Copy up to max networks from the last scans; returns how many. */
 int	qwzmac_qwz_scan_results(void *dev, struct qwzmac_bss *out, int max);
+
+struct qwzmac_chan {
+	unsigned	channel;	/* IEEE channel number */
+	unsigned	freq_mhz;
+	uint32_t	flags;		/* QWZMAC_CHAN_* */
+};
+#define QWZMAC_CHAN_2GHZ	0x01
+#define QWZMAC_CHAN_5GHZ	0x02
+#define QWZMAC_CHAN_PASSIVE	0x04	/* no probe requests: listen only */
+#define QWZMAC_CHAN_40MHZ	0x08	/* HT40 allowed */
+#define QWZMAC_CHAN_80MHZ	0x10	/* VHT80 allowed */
+/* The channels the firmware's regulatory domain allows; returns how many. */
+int	qwzmac_qwz_channels(void *dev, struct qwzmac_chan *out, int max);
+/*
+ * The country of the firmware's regulatory domain ("US", "00" for world)
+ * into cc[3]. Only reported to macOS; nothing applies macOS's country to
+ * the chip. ENXIO before the firmware sent one.
+ */
+int	qwzmac_qwz_country(void *dev, char cc[3]);
 
 #ifdef __cplusplus
 }
