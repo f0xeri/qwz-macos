@@ -41,7 +41,7 @@ static inline void qwz_airport_log(const char *format, ...)
 }
 #define ALOG(...) qwz_airport_log(__VA_ARGS__)
 
-#define QWZ_AIRPORT_VERSION	"0.2.3"
+#define QWZ_AIRPORT_VERSION	"0.2.4"
 
 class QwzAirportInterface;
 class QwzAirportEthernet;
@@ -129,6 +129,7 @@ private:
 	QwzAirportEthernet	*fBsdIf;	/* its BSD (data) interface */
 
 	uint8_t			 fPowerState;	/* what WCL set (setPOWER) */
+	uint32_t fPowerSerial;
 	volatile int		 fPowerWanted;	/* for powerTc() */
 	thread_call_t		 fPowerTc;
 	thread_call_t		 fRadioTc;

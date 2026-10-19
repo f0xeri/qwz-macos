@@ -267,7 +267,9 @@ QwzWifi::start(IOService *provider)
 		return false;
 	}
 	fLinkTc = thread_call_allocate(linkTc, this);
-	fFrontTc = thread_call_allocate(frontTc, this);
+	// One dispatcher preserves FIFO order across the unlocked front callback.
+	fFrontTc = thread_call_allocate_with_options(frontTc, this,
+	    THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
 	if (fLinkTc == nullptr || fFrontTc == nullptr) {
 		qwzmac_log_stop();
 		return false;

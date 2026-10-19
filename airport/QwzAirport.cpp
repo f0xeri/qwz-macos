@@ -15,6 +15,7 @@
 #include "QwzAirport.hpp"
 #include "QwzAirportInterface.hpp"
 #include "QwzAirportEthernet.hpp"
+#include "PowerWorker.hpp"
 
 #include <IOKit/network/IONetworkMedium.h>
 #include <IOKit/network/IOOutputQueue.h>
@@ -43,6 +44,7 @@ QwzAirport::init(OSDictionary *properties)
 	fBsdIf = nullptr;
 	fPowerState = 0;
 	fPowerWanted = 0;
+	fPowerSerial = 0;
 	fPowerTc = nullptr;
 	fRadioTc = nullptr;
 	fLifecycleLock = nullptr;
@@ -304,8 +306,13 @@ QwzAirport::start(IOService *provider)
 	fMac[0] = (fMac[0] | 0x02) & 0xfe;
 	fMac[5] ^= 0x01; // distinct even if the hardware MAC is already local
 	trace("create work queue");
-	fRadioTc = thread_call_allocate(radioTc, this);
-	fPowerTc = thread_call_allocate(powerTc, this);
+	// Preserve order when coalescing radio state notifications.
+	fRadioTc = thread_call_allocate_with_options(radioTc, this,
+	    THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
+	// Slow off/on operations must never overlap. Re-entry queues one
+	// follow-up invocation while the running worker drains the latest target.
+	fPowerTc = thread_call_allocate_with_options(powerTc, this,
+	    THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
 	// QWZMAC: share the provider queue, as in laobamac's wrapper. On
 	// 25G241 IO80211WorkQueue::getThread() returns NULL; a different
 	// provider loop makes IONetworkController::start pass it to
@@ -540,15 +547,26 @@ QwzAirport::radioGated(OSObject *owner, void *a0, void *, void *, void *)
 void
 QwzAirport::powerTc(thread_call_param_t p0, thread_call_param_t)
 {
-	QwzAirport *me = (QwzAirport *)p0;
-	int on = __atomic_load_n(&me->fPowerWanted, __ATOMIC_SEQ_CST);
-	int error;
-
-	if ((__atomic_load_n(&me->fLifecycle, __ATOMIC_SEQ_CST) & Stopping) ||
-	    !me->fConnected || me->fDrv.power(me->fDrv.dev) == on)
-		return;
-	error = me->fDrv.set_power(me->fDrv.dev, on);
-	ALOG("radio %s: %d", on ? "on" : "off", error);
+	auto me = static_cast<QwzAirport *>(p0);
+	QwzPower::drain(
+	    [me]() {
+		IOLockLock(me->fLifecycleLock);
+		QwzPower::Request request = {
+		    __atomic_load_n(&me->fPowerWanted, __ATOMIC_SEQ_CST), me->fPowerSerial};
+		IOLockUnlock(me->fLifecycleLock);
+		return request;
+	    },
+	    [me]() { return me->fDrv.power(me->fDrv.dev) ? 1 : 0; },
+	    [me](int on) { return me->fDrv.set_power(me->fDrv.dev, on); },
+	    [me](QwzPower::Request request, int actual, int error) {
+		me->setProperty("QwzAirportPowerCompleted", request.serial, 32);
+		me->setProperty("QwzAirportPowerActual", actual, 32);
+		me->setProperty("QwzAirportPowerError", static_cast<uint32_t>(error), 32);
+		ALOG("power request %u: wanted=%d actual=%d errno=%d",
+		    request.serial, request.wanted, actual, error);
+	    },
+	    [me]() { return
+		(__atomic_load_n(&me->fLifecycle, __ATOMIC_SEQ_CST) & Stopping) != 0; });
 }
 
 IOWorkLoop *
@@ -812,6 +830,8 @@ QwzAirport::setPOWER(IO80211SkywalkInterface *, apple80211_power_data *pd)
 	ALOG("setPOWER %u", pd->power_state[0]);
 	fPowerState = pd->power_state[0] ? 1 : 0;
 	__atomic_store_n(&fPowerWanted, (int)fPowerState, __ATOMIC_SEQ_CST);
+	setProperty("QwzAirportPowerRequested", ++fPowerSerial, 32);
+	setProperty("QwzAirportPowerTarget", fPowerState, 32);
 	thread_call_enter(fPowerTc);
 	IOLockUnlock(fLifecycleLock);
 	return kIOReturnSuccess;
