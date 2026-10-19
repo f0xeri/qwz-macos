@@ -60,3 +60,9 @@ Early scan result publication follows both references' IEEE80211_EVT_BEACON
 -> publishWCLBeacon path while scanPending, with separate SCAN_DONE. Our
 cross-kext seam uses bounded 250 ms progress snapshots of actual ticketed RX
 rather than calling WCL from the OpenBSD receive context.
+
+The Tahoe INFRA_ENUMERATED availability replay and early BSD Wi-Fi subtype
+publication are Qwz-specific fixes, not behavior copied from either pinned
+reference. Those references leave INFRA_ENUMERATED unsupported and set the
+BSD subtype during attachment. Placement and event routing were checked
+against this Mac's 25G241 kernel collection.

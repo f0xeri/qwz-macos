@@ -46,6 +46,7 @@ public:
 	/* Implemented requests (all others: QwzAirportStubs.inc) */
 	IOReturn getOP_MODE(apple80211_opmode_data *) override;
 	IOReturn getPOWERSAVE(apple80211_powersave_data *) override;
+	IOReturn setINFRA_ENUMERATED(apple80211_infra_enumerated *) override;
 	IOReturn getSUPPORTED_CHANNELS(apple80211_sup_channel_data *) override;
 	IOReturn getHW_SUPPORTED_CHANNELS(apple80211_sup_channel_data *) override;
 	IOReturn getCHANNELS_INFO(apple80211_channels_info *) override;

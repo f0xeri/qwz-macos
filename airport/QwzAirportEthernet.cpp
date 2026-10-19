@@ -31,7 +31,18 @@ QwzAirportEthernet::initWithSkywalkInterface(IONetworkController *controller,
 	ctl->macAddress(fUniqueId + 10);
 	fInterface = interface;
 	fAttached = false;
-	return super::init(controller);
+	if (!super::init(controller)) return false;
+	/* configd inspects a registered endpoint before it asks us to attach
+	 * its ifnet. Publish the Wi-Fi subtype from the outset, so the saved
+	 * service is not first created as ordinary Ethernet. */
+	if (!qwz_setInterfaceSubType(this, 3)) return false;
+	/* configd uses this for newly created non-built-in services. The
+	 * Ethernet implementation of this BSD endpoint still represents Wi-Fi;
+	 * reserve the Qualcomm/HeliPort name for the separate fallback endpoint.
+	 * Existing saved services are migrated explicitly by qwz-network-services.
+	 */
+	setProperty("Product Name", "Wi-Fi");
+	return true;
 }
 
 /* An ifnet's immutable uniqueid is separate from its on-air MAC. The
@@ -69,9 +80,6 @@ QwzAirportEthernet::attachToDataLinkLayer(IOOptionBits options, void *parameter)
 	IOReturn ret;
 
 	ALOG("BSD attach: enter");
-	/* Subtype 3: Wi-Fi, as Apple's drivers set it. */
-	if (!qwz_setInterfaceSubType(this, 3))
-		return kIOReturnNotReady;
 	ret = super::attachToDataLinkLayer(options, parameter);
 	if (ret != kIOReturnSuccess || fInterface == nullptr || ctl == nullptr)
 		return ret;

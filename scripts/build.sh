@@ -60,6 +60,9 @@ grep -v '^__Z' $OUT/undefined.txt | tr '\n' ' '; echo
 ls -la $OUT/QwzWifi.kext/Contents/MacOS/QwzWifi
 # qwzctl: command-line client for the same interface HeliPort uses.
 clang -Wall -O2 $ARCH -framework IOKit -framework CoreFoundation tools/qwzctl.c -o $OUT/qwzctl
+clang -Wall -Wextra -Werror -Wno-deprecated-declarations -fobjc-arc -O2 $ARCH \
+  -framework Foundation -framework SystemConfiguration -framework IOKit \
+  tools/qwz-network-services.m -o $OUT/qwz-network-services
 
 # QwzAirport.kext: the native Wi-Fi front (airport/, docs/native-wifi-research.md §8.5).
 # A separate kext so that QwzWifi.kext keeps to public KPIs: only this one links

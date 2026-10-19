@@ -120,6 +120,31 @@ QwzAirportInterface::postDriverAvailable(bool available)
 	ALOG("driver %savailable", available ? "" : "not ");
 }
 
+IOReturn
+QwzAirportInterface::setINFRA_ENUMERATED(apple80211_infra_enumerated *data)
+{
+	if (data == nullptr) return kIOReturnBadArgument;
+	/* QWZMAC: airportd opens its IOUC event pipe after BSD attachment.
+	 * The initial ready event can precede that subscription; airportd then
+	 * rejects every auto-join as "driver not available". Enumeration
+	 * follows event registration. Replay the actual ready snapshot to
+	 * user space only, without feeding WCL another reset/ready cycle or
+	 * rotating the MAC. A real later radio transition still goes through
+	 * the ordinary WCL lifecycle. AppleBCMWLAN's handler accepts this
+	 * non-null request; the pinned third-party handlers leave it unused.
+	 */
+	if (fRadioLifecycle.available && !fRadioLifecycle.resetPending) {
+		AirportWCL::DriverAvailability ev = {};
+		ev.version = 3;
+		ev.available = 1;
+		ev.reason = 0xe0821803;
+		IO80211SkywalkInterface::postMessage(AirportWCL::DriverAvailable,
+		    &ev, sizeof(ev), false);
+		fCtl->setProperty("QwzAirportAvailabilityReplayAttempted", kOSBooleanTrue);
+	}
+	return kIOReturnSuccess;
+}
+
 void
 QwzAirportInterface::radioChanged(int state)
 {
