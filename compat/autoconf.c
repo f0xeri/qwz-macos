@@ -23,6 +23,7 @@
 #include <netinet/if_ether.h>
 
 #include <net80211/ieee80211_var.h>
+#include <net80211/ieee80211_proto.h>
 #include <net80211/ieee80211_radiotap.h>
 #include <net80211/ieee80211_ioctl.h>
 #include <net80211/ieee80211_ra.h>
@@ -1459,6 +1460,25 @@ qwzmac_qwz_native_status(void *p, struct qwzmac_native_status *status)
 	if (ic->ic_state == IEEE80211_S_RUN && ic->ic_bss && ic->ic_bss->ni_chan &&
 	    ic->ic_bss->ni_chan != IEEE80211_CHAN_ANYC) {
 		qwzmac_copy_bss(ic, ic->ic_bss, &status->bss);
+		struct ieee80211_node *ni = ic->ic_bss;
+		status->rate_count = MIN(ni->ni_rates.rs_nrates, sizeof(status->rates));
+		memcpy(status->rates, ni->ni_rates.rs_rates, status->rate_count);
+		if (ni->ni_flags & IEEE80211_NODE_HT)
+			memcpy(status->ht_mcs, ni->ni_rxmcs, sizeof(status->ht_mcs));
+		status->vht_mcs = (ni->ni_flags & IEEE80211_NODE_VHT) ? ni->ni_vht_txmcs : 0xffff;
+		status->he_mcs = 0xffff;
+		if (ni->ni_flags & IEEE80211_NODE_HE) {
+			uint16_t local = ic->ic_he_rxmcs_80, peer = ni->ni_he_txmcs_80;
+			for (unsigned n = 0; n < 8; ++n) {
+				unsigned a = (local >> (2*n)) & 3, b = (peer >> (2*n)) & 3;
+				unsigned common = a == 3 || b == 3 ? 3 : MIN(a,b);
+				status->he_mcs = (status->he_mcs & ~(3U << (2*n))) | (common << (2*n));
+			}
+		}
+		if (ic->ic_flags & IEEE80211_F_RSNON) {
+			uint8_t *end = ieee80211_add_rsn(status->negotiated_rsn, ic, ni);
+			status->negotiated_rsn_length = end - status->negotiated_rsn;
+		}
 		status->authorized = ifp->if_link_state >= LINK_STATE_UP &&
 		    (!(ic->ic_flags & IEEE80211_F_RSNON) || ic->ic_bss->ni_port_valid);
 		status->beacon_sequence = ifp->if_qwzmac_beacon_sequence;

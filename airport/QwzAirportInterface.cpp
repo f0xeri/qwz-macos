@@ -1,3 +1,4 @@
+#include "ExtendedBss.hpp"
 /*
  * QwzAirportInterface (QwzAirportInterface.hpp).
  *
@@ -19,6 +20,9 @@
 #include <sys/errno.h>
 
 #define super IO80211InfraProtocol
+static_assert(sizeof(apple80211_rate_set_data) == 0xbc, "extended BSS rate-set layout");
+static_assert(sizeof(apple80211_mcs_index_set_data) == 0x10, "extended BSS HT MCS layout");
+static_assert(sizeof(apple80211_vht_mcs_index_set_data) == 6, "extended BSS VHT MCS layout");
 OSDefineMetaClassAndStructors(QwzAirportInterface, IO80211InfraProtocol);
 
 /* Enough for 2.4 and 5 GHz; qwz has no 6 GHz channels. */
@@ -41,6 +45,8 @@ QwzAirportInterface::initWithController(QwzAirport *controller)
 	fMacPending = fMacApplying = false;
 	fMacError = 0;
 	bzero(fMacAddress, sizeof(fMacAddress));
+	fJoinExtendedValid = false;
+	bzero(fJoinExtendedBss, sizeof(fJoinExtendedBss));
 	fJoinOperation = JoinIdle;
 	fJoinSerial = fJoinPolls = 0;
 	bzero(&fJoinRequest, sizeof(fJoinRequest));
@@ -481,6 +487,10 @@ IOReturn QwzAirportInterface::setWCL_LEAVE_NETWORK(apple80211_leave_network *)
 {
 	return fCtl->gate()->runAction(joinCommand, this, (void *)3);
 }
+IOReturn QwzAirportInterface::getWCL_EXTENDED_BSS_INFO(apple80211_extended_bss_info *out)
+{
+	return fCtl->gate()->runAction(joinCommand, this, (void *)7, out);
+}
 IOReturn QwzAirportInterface::getWCL_BSS_INFO(apple80211_beacon_msg *out)
 {
 	return fCtl->gate()->runAction(joinCommand, this, (void *)5, out);
@@ -504,6 +514,7 @@ void QwzAirportInterface::finishJoin(IOReturn error)
 }
 void QwzAirportInterface::disconnectJoin()
 {
+	fJoinExtendedValid = false;
 	if (fJoined) {
 		AirportWCL::LinkStatusEvent event = {};
 		memcpy(event.bssid, fJoinBSSID, 6);
@@ -519,6 +530,11 @@ IOReturn QwzAirportInterface::joinCommand(OSObject *, void *a0, void *a1,
 {
 	auto self = static_cast<QwzAirportInterface *>(a0);
 	unsigned operation = static_cast<unsigned>(reinterpret_cast<uintptr_t>(a1));
+	if (operation == 7) {
+		if (!a2 || !self->fJoinExtendedValid) return kIOReturnNotReady;
+		memcpy(a2, self->fJoinExtendedBss, sizeof(self->fJoinExtendedBss));
+		return kIOReturnSuccess;
+	}
 	if (operation == 8) {
 		int error = *static_cast<int *>(a2);
 		IOLockLock(self->fJoinLock);
@@ -575,6 +591,9 @@ IOReturn QwzAirportInterface::joinCommand(OSObject *, void *a0, void *a1,
 		bool samePeer = status.station.state == 4 &&
 		    !memcmp(status.station.bssid, self->fJoinBSSID, 6);
 		if (samePeer) {
+			self->fJoinExtendedValid = QwzExtendedBss::encode(status,
+			    self->fJoinExtendedBss, sizeof(self->fJoinExtendedBss));
+			self->fCtl->setProperty("QwzAirportExtendedBssReady", self->fJoinExtendedValid);
 			QwzScan::Message message;
 			size_t size = QwzScan::encode(status.bss, message);
 			if (size) {
@@ -594,16 +613,18 @@ IOReturn QwzAirportInterface::joinCommand(OSObject *, void *a0, void *a1,
 				self->fCtl->postMessage(self, AirportWCL::AssocComplete, &event, sizeof(event), true);
 			}
 		}
-		if (!self->fJoined && self->fJoinPending && self->fJoinBssValid &&
+		if (!self->fJoined && self->fJoinPending && self->fJoinBssValid && self->fJoinExtendedValid &&
 		    QwzJoin::connected(status, self->fJoinBSSID)) {
 			self->fJoined = true;
+			self->fCtl->nativeLink(true, status.station.rate_bps);
 			AirportWCL::LinkStatusEvent link = {};
 			memcpy(link.bssid, self->fJoinBSSID, 6); link.up = 1; link.reason = 255;
 			self->fCtl->postMessage(self, AirportWCL::LinkStatus, &link, sizeof(link), true);
+			if (!self->fJoined || !self->fJoinPending) return kIOReturnSuccess;
 			AirportWCL::FirstBeaconEvent beacon = {};
 			memcpy(beacon.peer.bssid, self->fJoinBSSID, 6);
 			self->fCtl->postMessage(self, AirportWCL::FirstBeacon, &beacon, sizeof(beacon), true);
-			self->fCtl->nativeLink(true, status.station.rate_bps);
+			if (!self->fJoined || !self->fJoinPending) return kIOReturnSuccess;
 			self->finishJoin(kIOReturnSuccess);
 		}
 		if (self->fJoined && (!samePeer || !status.authorized)) {

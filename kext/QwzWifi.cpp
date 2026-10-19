@@ -493,8 +493,9 @@ IOReturn QwzWifi::requestHeliportMode()
 	IOLockLock(fIfLock);
 	if (fStopping || !fModeTc) { IOLockUnlock(fIfLock); return kIOReturnNotReady; }
 	if (fNetIf) {
-		setProperty("QwzModeSwitch", "HeliPort");
-		IOLockUnlock(fIfLock); return kIOReturnSuccess;
+		bool attached = fNetIf->getIfnet() != nullptr;
+		setProperty("QwzModeSwitch", attached ? "HeliPort" : "Ethernet attachment failed");
+		IOLockUnlock(fIfLock); return attached ? kIOReturnSuccess : kIOReturnNotReady;
 	}
 	fHeliportRequested = true;
 	setProperty("QwzModeSwitch", "requested");
@@ -512,8 +513,9 @@ void QwzWifi::modeTc(thread_call_param_t p0, thread_call_param_t)
 	// A second request can re-enter this ONCE call while the first runs.
 	// Once Ethernet exists, do not leave/reset its newly joined network.
 	if (me->fNetIf != nullptr) {
+		bool attached = me->fNetIf->getIfnet() != nullptr;
 		IOLockUnlock(me->fIfLock);
-		me->setProperty("QwzModeSwitch", "HeliPort");
+		me->setProperty("QwzModeSwitch", attached ? "HeliPort" : "Ethernet attachment failed");
 		me->clientExit(); return;
 	}
 	if (me->fFrontOn) { front = me->fFront; ++me->fFrontCalls; }
@@ -534,10 +536,19 @@ void QwzWifi::modeTc(thread_call_param_t p0, thread_call_param_t)
 		if (ready) me->fNativePreferred = false;
 		IOLockUnlock(me->fIfLock);
 		if (ready) me->publishEthernet();
-		IOLockLock(me->fIfLock);
-		ready = ready && me->fNetIf != nullptr;
-		IOLockUnlock(me->fIfLock);
-		if (!ready) error = EBUSY;
+		// registerService only schedules BSD attachment. Do not report success
+		// until configd has actually created a usable ifnet.
+		bool attached = false;
+		for (unsigned n = 0; ready && n < 200; ++n) {
+			IOLockLock(me->fIfLock);
+			attached = me->fNetIf && me->fNetIf->getIfnet();
+			bool stopping = me->fStopping;
+			IOLockUnlock(me->fIfLock);
+			if (stopping) { attached = false; break; }
+			if (attached) break;
+			IOSleep(50);
+		}
+		if (!attached) error = ENXIO;
 	}
 	me->setProperty("QwzModeSwitch", error ? "handover failed; native interface retained" : "HeliPort");
 	QLOG("manual HeliPort handover result %d (native interface retained)", error);

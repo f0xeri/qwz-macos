@@ -38,3 +38,8 @@ ordering in Linux ath12k/mac.c (ath12k_mac_vdev_delete) and ath12k/wmi.c
 (ath12k_wmi_vdev_delete, ath12k_vdev_delete_resp_event), adapted to qwz's
 existing WMI transport and persistent DMA mappings. The ordinary HeliPort
 association path is not replaced.
+
+The macOS26 EXTENDED_BSS_INFO response layout follows AirportMtkWlan
+copyWCLExtendedBss (same b880d9c reference above), using qwz/net80211's
+actual negotiated data. ifnet uniqueid separation uses the public IOKit
+initIfnetParams override described by Apple IONetworkingFamily.

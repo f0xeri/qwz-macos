@@ -31,6 +31,7 @@ public:
 	IOReturn setWCL_ASSOCIATE(apple80211AssocCandidates *) override;
 	IOReturn setWCL_JOIN_ABORT(apple80211_wcl_abort_join *) override;
 	IOReturn setWCL_LEAVE_NETWORK(apple80211_leave_network *) override;
+	IOReturn getWCL_EXTENDED_BSS_INFO(apple80211_extended_bss_info *) override;
 	IOReturn getWCL_BSS_INFO(apple80211_beacon_msg *) override;
 	IOReturn getBEACON_INFO(apple80211_beacon_info_t *) override;
 	IOReturn setWCL_SCAN_REQ(apple80211ScanRequest *) override;
@@ -75,7 +76,8 @@ private:
 	qwzmac_native_join fJoinRequest;
 	uint8_t fJoinBssInfo[sizeof(AirportWCL::BeaconMetadata) + 0x800];
 	uint8_t fJoinBeaconInfo[0x808];
-	bool fJoinBssValid;
+	bool fJoinBssValid, fJoinExtendedValid;
+	uint8_t fJoinExtendedBss[0x214];
 	static void scanTc(thread_call_param_t, thread_call_param_t);
 	static IOReturn scanCommand(OSObject *, void *, void *, void *, void *);
 	void finishScan(IOReturn);

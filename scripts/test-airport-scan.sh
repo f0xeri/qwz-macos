@@ -16,3 +16,8 @@ build/test/airport_power_test
 clang++ -std=c++14 -g -fsanitize=address,undefined tests/airport_join_test.cpp \
     -o build/test/airport_join_test
 build/test/airport_join_test
+
+# Current-BSS response required by WCL before accepting a completed join.
+clang++ -std=c++14 -g -fsanitize=address,undefined tests/airport_extended_bss_test.cpp \
+    -o build/test/airport_extended_bss_test
+build/test/airport_extended_bss_test

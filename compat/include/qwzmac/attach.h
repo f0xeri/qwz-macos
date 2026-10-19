@@ -174,6 +174,9 @@ struct qwzmac_native_status {
 	struct qwzmac_scan_bss bss;
 	uint32_t authorized, beacon_sequence, beacon_length;
 	uint8_t beacon[2048];
+	uint8_t rate_count, rates[32], ht_mcs[10];
+	uint16_t vht_mcs, he_mcs, negotiated_rsn_length;
+	uint8_t negotiated_rsn[257];
 };
 int qwzmac_qwz_set_mac(void *, const uint8_t[6]);
 int qwzmac_qwz_native_join(void *, struct qwzmac_native_join *);

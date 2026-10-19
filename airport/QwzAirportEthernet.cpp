@@ -25,9 +25,25 @@ bool
 QwzAirportEthernet::initWithSkywalkInterface(IONetworkController *controller,
     IO80211SkywalkInterface *interface)
 {
+	memcpy(fUniqueId, "QWZAIRPORT", 10);
+	auto ctl = OSDynamicCast(QwzAirport, controller);
+	if (!ctl) return false;
+	ctl->macAddress(fUniqueId + 10);
 	fInterface = interface;
 	fAttached = false;
 	return super::init(controller);
+}
+
+/* An ifnet's immutable uniqueid is separate from its on-air MAC. The
+ * default uses the provider MAC, which prevents a second factory-MAC
+ * Ethernet endpoint from attaching even after the native MAC changes.
+ * Keep a stable role-specific ID; leave all actual MAC values untouched. */
+bool QwzAirportEthernet::initIfnetParams(struct ifnet_init_params *params)
+{
+	if (!super::initIfnetParams(params)) return false;
+	params->uniqueid = fUniqueId;
+	params->uniqueid_len = sizeof(fUniqueId);
+	return true;
 }
 
 /* The Skywalk interface must prepare the ifnet inside the work-loop gate. */

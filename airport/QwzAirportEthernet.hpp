@@ -31,12 +31,14 @@ public:
 	 */
 	IOService *getProvider() const override;
 	bool setLinkState(IO80211LinkState state);
+	bool initIfnetParams(struct ifnet_init_params *) override;
 
 private:
 	static IOReturn prepareBSDGated(OSObject *, void *, void *, void *, void *);
 
 	IO80211SkywalkInterface	*fInterface;
 	bool			 fAttached;
+	uint8_t fUniqueId[16];
 };
 
 #endif /* QWZ_AIRPORT_ETHERNET_HPP */
