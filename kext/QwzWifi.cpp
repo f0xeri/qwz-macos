@@ -216,6 +216,9 @@ QwzWifi::start(IOService *provider)
 	fPowerNotifier = nullptr;
 	fNetIf = nullptr;
 	fStopping = false;
+	fNativePreferred = false;
+	fHeliportRequested = false;
+	fModeTc = nullptr;
 	fMedium = nullptr;
 	fLinkTc = nullptr;
 	fLinkUp = 0;
@@ -270,7 +273,9 @@ QwzWifi::start(IOService *provider)
 	// One dispatcher preserves FIFO order across the unlocked front callback.
 	fFrontTc = thread_call_allocate_with_options(frontTc, this,
 	    THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
-	if (fLinkTc == nullptr || fFrontTc == nullptr) {
+	fModeTc = thread_call_allocate_with_options(modeTc, this,
+	    THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
+	if (fLinkTc == nullptr || fFrontTc == nullptr || fModeTc == nullptr) {
 		qwzmac_log_stop();
 		return false;
 	}
@@ -300,7 +305,8 @@ QwzWifi::start(IOService *provider)
 	PE_parse_boot_argn("qwzdebug", &mask, sizeof(mask));
 	qwz_debug = mask;
 
-	bool have_net = readNetwork(&net);
+	fNativePreferred = getProperty("QwzNativeData") == kOSBooleanTrue;
+	bool have_net = fNativePreferred ? false : readNetwork(&net);
 	bzero(&ops, sizeof(ops));
 	ops.cookie = this;
 	ops.ready = netReady;
@@ -441,36 +447,99 @@ QwzWifi::nameInterface(IONetworkInterface *netif)
 void
 QwzWifi::netReady(void *cookie, const uint8_t mac[6])
 {
-	QwzWifi *me = (QwzWifi *)cookie;
+	auto me = static_cast<QwzWifi *>(cookie);
+	bcopy(mac, me->fMac, sizeof(me->fMac));
+	if (!me->fNativePreferred) me->publishEthernet();
+	else {
+		me->setProperty("QwzDataOwner", "waiting for native front");
+	}
+	// Publish only after firmware and the MAC are ready; the nub matches here.
+	me->registerService();
+}
+
+void QwzWifi::publishEthernet()
+{
 	IOEthernetInterface *netif = nullptr;
 
-	IOLockLock(me->fIfLock);
-	if (me->fStopping || me->fNetIf != nullptr) {
-		IOLockUnlock(me->fIfLock);
+	IOLockLock(this->fIfLock);
+	if (this->fStopping || this->fNetIf != nullptr ||
+	    (fNativePreferred && fFrontOn)) {
+		IOLockUnlock(this->fIfLock);
 		return;
 	}
-	bcopy(mac, me->fMac, sizeof(me->fMac));
-	if (!me->attachInterface((IONetworkInterface **)&netif, false)) {
-		IOLockUnlock(me->fIfLock);
+	if (!this->attachInterface((IONetworkInterface **)&netif, false)) {
+		IOLockUnlock(this->fIfLock);
 		QLOG("cannot attach the network interface");
 		return;
 	}
-	me->nameInterface(netif);
+	this->nameInterface(netif);
 	netif->registerService();
-	me->fNetIf = netif;
-	IOLockUnlock(me->fIfLock);
-	me->setLinkStatus(kIONetworkLinkValid);
+	this->fNetIf = netif;
+	IOLockUnlock(this->fIfLock);
+	this->setLinkStatus(kIONetworkLinkValid);
 	QLOG("network interface %s%u published", netif->getNamePrefix(),
 	    netif->getUnitNumber());
-	/*
-	 * IOEthernetController::start() does not register the controller;
-	 * unregistered, it is invisible to IOServiceGetMatchingServices() and
-	 * so to HeliPort (seen with 0.0.6: "!registered" in ioreg). Register
-	 * only now: QwzAirport matches on the registered QwzWifi and needs the
-	 * MAC at once; injected by OpenCore it would otherwise start during
-	 * firmware bring-up and give up.
-	 */
-	me->registerService();
+	setProperty("QwzDataOwner", "Ethernet fallback");
+	if (fNativePreferred) {
+		qwzmac_network network = {};
+		if (readNetwork(&network)) (void)qwzmac_qwz_join(fQwz, &network);
+		bzero(&network, sizeof(network));
+	}
+}
+
+/* Explicit one-way handover only. No timer and no automatic fallback. */
+IOReturn QwzWifi::requestHeliportMode()
+{
+	IOLockLock(fIfLock);
+	if (fStopping || fModeTc == nullptr) {
+		IOLockUnlock(fIfLock); return kIOReturnNotReady;
+	}
+	if (!fNativePreferred && fNetIf != nullptr) {
+		setProperty("QwzModeSwitch", "HeliPort");
+		IOLockUnlock(fIfLock); return kIOReturnSuccess;
+	}
+	fHeliportRequested = true;
+	setProperty("QwzModeSwitch", "requested");
+	thread_call_enter(fModeTc);
+	IOLockUnlock(fIfLock);
+	return kIOReturnSuccess;
+}
+
+void QwzWifi::modeTc(thread_call_param_t p0, thread_call_param_t)
+{
+	auto me = static_cast<QwzWifi *>(p0);
+	if (!me->clientEnter()) return;
+	// Terminate the native provider, including its controller and interfaces.
+	// No driver lock is held: stop() drains WCL workers and disconnects RX.
+	auto children = me->getChildIterator(gIOServicePlane);
+	bool ok = true;
+	while (children) {
+		auto child = OSDynamicCast(IOService, children->getNextObject());
+		if (!child) break;
+		if (!child->metaCast("QwzAirportNub")) continue;
+		if (!child->terminate(kIOServiceRequired | kIOServiceSynchronous)) ok = false;
+	}
+	OSSafeReleaseNULL(children);
+	IOLockLock(me->fIfLock);
+	ok = ok && !me->fFrontOn && !me->fStopping;
+	IOLockUnlock(me->fIfLock);
+	if (ok) {
+		(void)qwzmac_qwz_native_leave(me->fQwz);
+		int error = qwzmac_qwz_set_mac(me->fQwz, me->fMac);
+		if (!error) {
+			IOLockLock(me->fIfLock);
+			me->fNativePreferred = false;
+			IOLockUnlock(me->fIfLock);
+			me->publishEthernet();
+		}
+		else { me->setProperty("QwzModeSwitch", "MAC restore failed"); me->clientExit(); return; }
+		IOLockLock(me->fIfLock);
+		bool published = me->fNetIf != nullptr;
+		IOLockUnlock(me->fIfLock);
+		me->setProperty("QwzModeSwitch", published ? "HeliPort" : "Ethernet publication failed");
+		if (published) QLOG("manual switch to HeliPort mode completed");
+	} else me->setProperty("QwzModeSwitch", "native teardown failed; Ethernet withheld");
+	me->clientExit();
 }
 
 /* qwz context, spl lock held (serializes all calls). */
@@ -478,7 +547,22 @@ void
 QwzWifi::netInput(void *cookie, const void *frame, size_t len)
 {
 	QwzWifi *me = (QwzWifi *)cookie;
+	IOLockLock(me->fIfLock);
+	if (me->fNativePreferred) {
+		if (!me->fStopping && me->fFrontOn && me->fFront.input != nullptr) {
+			auto front = me->fFront;
+			++me->fFrontCalls;
+			IOLockUnlock(me->fIfLock);
+			front.input(front.cookie, frame, len);
+			IOLockLock(me->fIfLock);
+			if (--me->fFrontCalls == 0)
+				IOLockWakeup(me->fIfLock, &me->fFrontCalls, false);
+			IOLockUnlock(me->fIfLock);
+			return;
+		}
+	}
 	IOEthernetInterface *netif = me->fNetIf;
+	IOLockUnlock(me->fIfLock);
 	mbuf_t m;
 
 	if (netif == nullptr || len == 0 || len > QWZ_FRAME_MAX)
@@ -697,7 +781,7 @@ QwzWifi::frontConnect(const qwz_airport_front *front, qwz_airport_driver *driver
 	if (fQwz == nullptr || fFrontTc == nullptr)
 		return kIOReturnNotReady;	/* -qwzprobe */
 	IOLockLock(fIfLock);
-	if (fStopping || fFrontOn) {
+	if (fStopping || fHeliportRequested || fFrontOn || (fNativePreferred && fNetIf != nullptr)) {
 		IOLockUnlock(fIfLock);
 		return fStopping ? kIOReturnNotReady : kIOReturnBusy;
 	}
@@ -716,6 +800,13 @@ QwzWifi::frontConnect(const qwz_airport_front *front, qwz_airport_driver *driver
 	driver->scan_start = dvScanStart;
 	driver->scan_poll = dvScanPoll;
 	driver->scan_snapshot = dvScanSnapshot;
+	driver->data_owner = dvDataOwner;
+	driver->set_mac = dvSetMac;
+	driver->join = dvJoin;
+	driver->leave = dvLeave;
+	driver->join_status = dvJoinStatus;
+	driver->output = dvOutput;
+	setProperty("QwzDataOwner", fNativePreferred ? "native front" : "Ethernet");
 	QLOG("airport: native Wi-Fi front connected");
 	/* Tell it where the radio is now; later changes come from netRadio(). */
 	frontQueue(qwzmac_qwz_power(fQwz) ? QWZMAC_RADIO_UP : QWZMAC_RADIO_DOWN);
@@ -816,6 +907,7 @@ QwzWifi::dvSetPower(void *dev, int on)
 
 	if (!me->clientEnter())
 		return ENXIO;
+	if (!on && dvDataOwner(dev)) (void)qwzmac_qwz_native_leave(me->fQwz);
 	error = qwzmac_qwz_set_power(me->fQwz, on);
 	me->clientExit();
 	return error;
@@ -909,6 +1001,14 @@ QwzWifi::stop(IOService *provider)
 	netif = fNetIf;
 	fNetIf = nullptr;
 	IOLockUnlock(fIfLock);
+	if (fModeTc != nullptr) {
+		while (thread_call_isactive(fModeTc)) {
+			thread_call_cancel(fModeTc);
+			IOSleep(5);
+		}
+		thread_call_free(fModeTc);
+		fModeTc = nullptr;
+	}
 	/* linkTc() calls into qwz: wait for it (fStopping stops re-arming). */
 	if (fLinkTc != nullptr) {
 		while (thread_call_isactive(fLinkTc)) {
@@ -993,4 +1093,52 @@ int QwzWifi::dvScanSnapshot(void *dev, uint32_t ticket, qwzmac_scan_bss *out, in
 	int n = qwzmac_qwz_scan_snapshot(me->fQwz, ticket, out, max);
 	me->clientExit();
 	return n;
+}
+
+int QwzWifi::dvSetMac(void *dev, const uint8_t mac[6])
+{
+	auto me = static_cast<QwzWifi *>(dev);
+	if (!dvDataOwner(dev) || !me->clientEnter()) return ENXIO;
+	int error = qwzmac_qwz_native_leave(me->fQwz);
+	if (!error) error = qwzmac_qwz_set_mac(me->fQwz, mac);
+	me->clientExit();
+	return error;
+}
+int QwzWifi::dvDataOwner(void *dev)
+{
+	auto me = static_cast<QwzWifi *>(dev);
+	IOLockLock(me->fIfLock);
+	int owner = me->fNativePreferred && me->fFrontOn && me->fNetIf == nullptr;
+	IOLockUnlock(me->fIfLock);
+	return owner;
+}
+int QwzWifi::dvJoin(void *dev, qwzmac_native_join *request)
+{
+	auto me = static_cast<QwzWifi *>(dev);
+	if (!dvDataOwner(dev) || !me->clientEnter()) {
+		bzero(request->pmk, sizeof(request->pmk)); return ENXIO;
+	}
+	int error = qwzmac_qwz_native_join(me->fQwz, request);
+	me->clientExit(); return error;
+}
+int QwzWifi::dvLeave(void *dev)
+{
+	auto me = static_cast<QwzWifi *>(dev);
+	if (!dvDataOwner(dev) || !me->clientEnter()) return ENXIO;
+	int error = qwzmac_qwz_native_leave(me->fQwz);
+	me->clientExit(); return error;
+}
+int QwzWifi::dvJoinStatus(void *dev, qwzmac_native_status *status)
+{
+	auto me = static_cast<QwzWifi *>(dev);
+	if (!me->clientEnter()) return ENXIO;
+	int error = qwzmac_qwz_native_status(me->fQwz, status);
+	me->clientExit(); return error;
+}
+int QwzWifi::dvOutput(void *dev, const void *frame, size_t len)
+{
+	auto me = static_cast<QwzWifi *>(dev);
+	if (!dvDataOwner(dev) || !me->clientEnter()) return ENXIO;
+	int error = qwzmac_qwz_output(me->fQwz, frame, len);
+	me->clientExit(); return error;
 }

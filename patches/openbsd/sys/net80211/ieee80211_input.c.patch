@@ -16,3 +16,22 @@ diff --git a/sys/net80211/ieee80211_input.c b/sys/net80211/ieee80211_input.c
  	if (ic->ic_state == IEEE80211_S_SCAN &&
  	    IEEE80211_IS_CHAN_5GHZ(ni->ni_chan)) {
  		/*
+@@ -2113,6 +2121,18 @@ ieee80211_recv_probe_resp(struct ieee80211com *ic, struct mbuf *m,
+ 	ni->ni_erp = erp;
+ 	/* NB: must be after ni_chan is setup */
+ 	ieee80211_setup_rates(ic, ni, rates, xrates, IEEE80211_F_DOSORT);
++#ifdef QWZMAC
++	/* QWZMAC: WCL FirstBeacon/BEACON_INFO must describe a real associated
++	 * beacon, not a probe response or the candidate's pre-join cache. */
++	if (!isprobe && ic->ic_state == IEEE80211_S_RUN && ic->ic_bss != NULL &&
++	    IEEE80211_ADDR_EQ(wh->i_addr3, ic->ic_bss->ni_bssid) &&
++	    m->m_pkthdr.len >= 36 &&
++	    m->m_pkthdr.len <= sizeof(ic->ic_if.if_qwzmac_beacon)) {
++		ic->ic_if.if_qwzmac_beacon_length = m->m_pkthdr.len;
++		m_copydata(m, 0, m->m_pkthdr.len, ic->ic_if.if_qwzmac_beacon);
++		ic->ic_if.if_qwzmac_beacon_sequence++;
++	}
++#endif
+ #ifndef IEEE80211_STA_ONLY
+ 	if (ic->ic_opmode == IEEE80211_M_IBSS && is_new && isprobe) {
+ 		/*

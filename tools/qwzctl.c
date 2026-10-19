@@ -199,7 +199,36 @@ main(int argc, char **argv)
 		    "opened\n");
 		return 1;
 	}
-	if (strcmp(argv[1], "info") == 0)
+	if (strcmp(argv[1], "mode") == 0 && argc == 3 && strcmp(argv[2], "heliport") == 0) {
+		kern_return_t error = IOConnectCallMethod(con, QWZ_IOCTL_HELIPORT_MODE,
+		    NULL, 0, NULL, 0, NULL, NULL, NULL, NULL);
+		if (error) fprintf(stderr, "mode switch: 0x%x (run with sudo)\n", error);
+		else {
+			io_service_t service = IO_OBJECT_NULL;
+			error = IOConnectGetService(con, &service);
+			int ready = 0;
+			for (unsigned poll = 0; !error && poll < 300; ++poll) {
+				CFTypeRef value = IORegistryEntryCreateCFProperty(service,
+				    CFSTR("QwzModeSwitch"), kCFAllocatorDefault, 0);
+				if (value && CFGetTypeID(value) == CFStringGetTypeID()) {
+					ready = CFEqual(value, CFSTR("HeliPort"));
+					if (!ready && !CFEqual(value, CFSTR("requested"))) {
+						char text[160];
+						if (CFStringGetCString(value, text, sizeof(text), kCFStringEncodingUTF8))
+							fprintf(stderr, "mode switch: %s\n", text);
+						error = kIOReturnError;
+					}
+				}
+				if (value) CFRelease(value);
+				if (ready || error) break;
+				usleep(200000);
+			}
+			if (service) IOObjectRelease(service);
+			if (!ready && !error) { fprintf(stderr, "mode switch timed out\n"); error = kIOReturnTimeout; }
+			if (ready) printf("HeliPort mode ready. Native mode returns after reboot.\n");
+		}
+		rc = error != KERN_SUCCESS;
+	} else if (strcmp(argv[1], "info") == 0)
 		rc = cmd_info(con);
 	else if (strcmp(argv[1], "status") == 0)
 		rc = cmd_status(con);
@@ -223,6 +252,6 @@ main(int argc, char **argv)
 		return rc;
 usage:
 	fprintf(stderr, "usage: qwzctl info | status | scan | join SSID | "
-	    "leave | power on|off\n");
+	    "leave | power on|off | mode heliport\n");
 	return 2;
 }

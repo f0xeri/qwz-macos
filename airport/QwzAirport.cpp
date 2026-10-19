@@ -21,6 +21,7 @@
 #include <IOKit/network/IOOutputQueue.h>
 #include <libkern/version.h>
 #include <sys/sysctl.h>
+#include <net/kpi_interface.h>
 
 #define super IO80211Controller
 OSDefineMetaClassAndStructors(QwzAirport, IO80211Controller);
@@ -37,6 +38,8 @@ QwzAirport::init(OSDictionary *properties)
 	bzero(&fDrv, sizeof(fDrv));
 	bzero(&fFront, sizeof(fFront));
 	fConnected = false;
+	fNativeData = false;
+	fNativeLinkUp = 0;
 	bzero(fMac, sizeof(fMac));
 	fWorkQueue = nullptr;
 	fGate = nullptr;
@@ -119,14 +122,18 @@ QwzAirport::trace(const char *stage)
 void
 QwzAirport::stopAsync()
 {
-	if (fNetIf != nullptr)
+	if (fNetIf != nullptr) {
+		fNetIf->stopJoins();
 		fNetIf->stopScans();
+	}
 	if (fLifecycleLock != nullptr)
 		IOLockLock(fLifecycleLock);
 	__atomic_fetch_or(&fLifecycle, (unsigned)Stopping, __ATOMIC_SEQ_CST);
 	if (fLifecycleLock != nullptr)
 		IOLockUnlock(fLifecycleLock);
 	if (fConnected) {
+		__atomic_store_n(&fNativeLinkUp, 0, __ATOMIC_SEQ_CST);
+		if (fNativeData) (void)fDrv.leave(fDrv.dev);
 		fQwz->callPlatformFunction(QWZ_AIRPORT_DISCONNECT, false,
 		    fFront.cookie, nullptr, nullptr, nullptr);
 		fConnected = false;
@@ -282,6 +289,7 @@ QwzAirport::start(IOService *provider)
 	fFront.size = sizeof(fFront);
 	fFront.cookie = this;
 	fFront.event = frontEvent;
+	fFront.input = frontInput;
 	fDrv.version = QWZ_AIRPORT_API_VERSION;
 	fDrv.size = sizeof(fDrv);
 	r = provider->callPlatformFunction(QWZ_AIRPORT_CONNECT, false, &fFront, &fDrv,
@@ -291,6 +299,9 @@ QwzAirport::start(IOService *provider)
 		return false;
 	}
 	fConnected = true;
+	fNativeData = fDrv.data_owner(fDrv.dev) != 0;
+	setProperty("QwzAirportDataMode", fNativeData ? kOSBooleanTrue : kOSBooleanFalse);
+	setProperty("QwzAirportMACPolicy", "WCL runtime MAC");
 	if (fDrv.hw_address(fDrv.dev, fMac) != 0) {
 		ALOG("QwzWifi has no MAC address yet (firmware not up)");
 		releaseAll();
@@ -303,8 +314,10 @@ QwzAirport::start(IOService *provider)
 	 * identity. No firmware/vdev MAC is changed; replace this arrangement
 	 * when C4 transfers ownership of the real data interface.
 	 */
-	fMac[0] = (fMac[0] | 0x02) & 0xfe;
-	fMac[5] ^= 0x01; // distinct even if the hardware MAC is already local
+	if (!fNativeData) {
+		fMac[0] = (fMac[0] | 0x02) & 0xfe;
+		fMac[5] ^= 0x01;
+	} // distinct even if the hardware MAC is already local
 	trace("create work queue");
 	// Preserve order when coalescing radio state notifications.
 	fRadioTc = thread_call_allocate_with_options(radioTc, this,
@@ -671,14 +684,47 @@ QwzAirport::selectMedium(const IONetworkMedium *medium)
 	return kIOReturnSuccess;
 }
 
-/* Stage C2: no data path here yet (QwzWifi's en4 carries it). */
+/* The native BSD interface is the only IP data path in C4 mode. */
 UInt32
-QwzAirport::outputPacket(mbuf_t m, void *param)
+QwzAirport::outputPacket(mbuf_t packet, void *)
 {
-	(void)param;
-	if (m != nullptr)
-		freePacket(m);
-	return kIOReturnOutputDropped;
+	if (packet == nullptr) return kIOReturnOutputDropped;
+	size_t length = mbuf_pkthdr_len(packet);
+	int error = ENETDOWN;
+	if (fNativeData && __atomic_load_n(&fNativeLinkUp, __ATOMIC_SEQ_CST) && length >= 14 && length <= 2318) {
+		void *bytes = IOMalloc(length);
+		if (bytes != nullptr) {
+			error = mbuf_copydata(packet, 0, length, bytes);
+			if (!error) error = fDrv.output(fDrv.dev, bytes, length);
+			IOFree(bytes, length);
+		}
+	}
+	freePacket(packet);
+	return error == 0 ? kIOReturnOutputSuccess : kIOReturnOutputDropped;
+}
+
+void QwzAirport::frontInput(void *cookie, const void *bytes, size_t length)
+{
+	auto self = static_cast<QwzAirport *>(cookie);
+	// Called under the driver's spl lock. Never enter the WCL gate here.
+	if (!self->fNativeData || !__atomic_load_n(&self->fNativeLinkUp, __ATOMIC_SEQ_CST) ||
+	    self->fBsdIf == nullptr || length < 14 || length > 2318)
+		return;
+	mbuf_t packet = self->allocatePacket(static_cast<UInt32>(length));
+	if (packet == nullptr) return;
+	if (mbuf_copyback(packet, 0, length, bytes, MBUF_DONTWAIT)) {
+		self->freePacket(packet); return;
+	}
+	ifnet_stat_increment_in(self->fBsdIf->getIfnet(), 1, static_cast<uint32_t>(length), 0);
+	self->fBsdIf->inputPacket(packet, static_cast<UInt32>(length));
+}
+
+void QwzAirport::nativeLink(bool up, uint64_t rate)
+{
+	__atomic_store_n(&fNativeLinkUp, up ? 1U : 0U, __ATOMIC_SEQ_CST);
+	if (fBsdIf != nullptr) fBsdIf->setLinkState(up ? kIO80211NetworkLinkUp : kIO80211NetworkLinkDown);
+	setLinkStatus(kIONetworkLinkValid | (up ? kIONetworkLinkActive : 0),
+	    getSelectedMedium(), up ? rate : 0);
 }
 
 IOReturn
@@ -688,25 +734,30 @@ QwzAirport::getHardwareAddress(IOEthernetAddress *addr)
 	return kIOReturnSuccess;
 }
 
-/*
- * WCL sets the (private) address itself and replays it after every
- * DriverAvailable. qwz creates its vdev with the factory address, and
- * changing it needs at least a new vdev (docs/native-wifi-research.md §8.4),
- * so for now only the current address is accepted. How WCL reacts to the
- * refusal is a C2 test question.
- */
+/* As AirportMtkWlan: synchronize BSD, start firmware reconfiguration, and
+ * retain an arriving join until it completes. The slow work stays outside
+ * WCL's gate; internal MAC changes do not replay DriverAvailable/reset. */
 IOReturn
 QwzAirport::setHardwareAddress(const void *addr, UInt32 len)
 {
-	switch (AirportWCL::planMacUpdate(fMac, (const uint8_t *)addr, len, false)) {
-	case AirportWCL::MacUpdate::Unchanged:
-		return kIOReturnSuccess;
-	case AirportWCL::MacUpdate::Invalid:
-		return kIOReturnBadArgument;
-	default:
-		ALOG("MAC address change refused (not supported yet)");
-		return kIOReturnUnsupported;
+	auto plan = AirportWCL::planMacUpdate(fMac, (const uint8_t *)addr, len, false);
+	if (plan == AirportWCL::MacUpdate::Invalid) return kIOReturnBadArgument;
+	if (plan == AirportWCL::MacUpdate::Unchanged) return kIOReturnSuccess;
+	if (fNetIf && fNetIf->macBusy()) return kIOReturnBusy;
+	if (!fNativeData) return kIOReturnUnsupported;
+	if (!fNetIf || !fBsdIf || !fBsdIf->getIfnet()) return kIOReturnNotReady;
+	nativeLink(false, 0);
+	if (fBsdIf && fBsdIf->getIfnet()) {
+		int error = ifnet_set_lladdr(fBsdIf->getIfnet(), addr, 6);
+		if (error) return kIOReturnError;
 	}
+	memcpy(fMac, addr, 6);
+	setProperty("IOMACAddress", const_cast<void *>(addr), 6);
+	fBsdIf->setProperty(kIOMACAddress, const_cast<void *>(addr), 6);
+	setProperty("QwzAirportMACPolicy", "WCL runtime MAC; applied before join");
+	fNetIf->queueMacAddress(fMac);
+	ALOG("WCL runtime MAC accepted; reconfiguration started asynchronously");
+	return kIOReturnSuccess;
 }
 
 /* qwz has no receive filter: it passes all multicast. */

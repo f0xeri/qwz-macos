@@ -1293,6 +1293,35 @@ qwzmac_qwz_scan_poll(void *p, uint32_t ticket)
 	return error;
 }
 
+static void
+qwzmac_copy_bss(struct ieee80211com *ic, struct ieee80211_node *ni,
+    struct qwzmac_scan_bss *b)
+{
+	unsigned channel = ieee80211_chan2ieee(ic, ni->ni_chan), rates;
+	uint8_t *ie;
+	memset(b, 0, sizeof(*b));
+	b->ssid_len = ni->ni_esslen;
+	memcpy(b->ssid, ni->ni_essid, b->ssid_len);
+	memcpy(b->bssid, ni->ni_bssid, 6);
+	b->channel = channel;
+	b->interval = ni->ni_intval;
+	b->capability = ni->ni_capinfo;
+	b->rssi_dbm = QWZMAC_RSSI_DBM(ni);
+	ie = b->ies;
+	*ie++ = 0; *ie++ = b->ssid_len;
+	memcpy(ie, b->ssid, b->ssid_len); ie += b->ssid_len;
+	rates = MIN(ni->ni_rates.rs_nrates, 8);
+	*ie++ = 1; *ie++ = rates;
+	memcpy(ie, ni->ni_rates.rs_rates, rates); ie += rates;
+	*ie++ = 3; *ie++ = 1; *ie++ = channel;
+	/* Preserve RSN/WPA bytes; do not reinterpret security capabilities. */
+	if (ni->ni_rsnie != NULL) {
+		size_t len = (size_t)ni->ni_rsnie[1] + 2;
+		memcpy(ie, ni->ni_rsnie, len); ie += len;
+	}
+	b->ie_len = ie - b->ies; /* <= 34+10+3+257 = 304 */
+}
+
 int
 qwzmac_qwz_scan_snapshot(void *p, uint32_t ticket, struct qwzmac_scan_bss *out, int max)
 {
@@ -1312,8 +1341,7 @@ qwzmac_qwz_scan_snapshot(void *p, uint32_t ticket, struct qwzmac_scan_bss *out, 
 	}
 	RBT_FOREACH(ni, ieee80211_tree, &ic->ic_tree) {
 		struct qwzmac_scan_bss *b;
-		uint8_t *ie;
-		unsigned rates, channel;
+		unsigned channel;
 		if (n >= max) break;
 		/* Cache membership is not proof that the AP was heard this scan. */
 		if (!qwzmac_scan_observed(&ni->ni_qwzmac_scan_seen, ticket)) continue;
@@ -1322,28 +1350,135 @@ qwzmac_qwz_scan_snapshot(void *p, uint32_t ticket, struct qwzmac_scan_bss *out, 
 		channel = ieee80211_chan2ieee(ic, ni->ni_chan);
 		if (channel == 0 || channel > 196) continue;
 		b = &out[n++];
-		memset(b, 0, sizeof(*b));
-		b->ssid_len = ni->ni_esslen;
-		memcpy(b->ssid, ni->ni_essid, b->ssid_len);
-		memcpy(b->bssid, ni->ni_bssid, 6);
-		b->channel = channel;
-		b->interval = ni->ni_intval;
-		b->capability = ni->ni_capinfo;
-		b->rssi_dbm = QWZMAC_RSSI_DBM(ni);
-		ie = b->ies;
-		*ie++ = 0; *ie++ = b->ssid_len;
-		memcpy(ie, b->ssid, b->ssid_len); ie += b->ssid_len;
-		rates = MIN(ni->ni_rates.rs_nrates, 8);
-		*ie++ = 1; *ie++ = rates;
-		memcpy(ie, ni->ni_rates.rs_rates, rates); ie += rates;
-		*ie++ = 3; *ie++ = 1; *ie++ = channel;
-		/* Preserve RSN/WPA bytes; do not reinterpret security capabilities. */
-		if (ni->ni_rsnie != NULL) {
-			size_t len = (size_t)ni->ni_rsnie[1] + 2;
-			memcpy(ie, ni->ni_rsnie, len); ie += len;
-		}
-		b->ie_len = ie - b->ies; /* <= 34+10+3+257 = 304 */
+		qwzmac_copy_bss(ic, ni, b);
 	}
 	qwzmac_spl_unlock();
 	return n;
+}
+
+/* Runtime address only. qwz_init copies ac_enaddr into ic_myaddr and creates
+ * the firmware vdev with it. Never modify factory/NVM or rewrite packets. */
+int
+qwzmac_qwz_set_mac(void *p, const uint8_t mac[6])
+{
+	struct qwzmac_dev *qd = p;
+	struct ieee80211com *ic;
+	struct ifnet *ifp;
+	uint8_t any = 0;
+	int i, error, was_up;
+	if (!mac) return EINVAL;
+	for (i = 0; i < 6; ++i) any |= mac[i];
+	if (!any || (mac[0] & 1)) return EINVAL;
+	if (qwzmac_mgmt_busy(qd)) return EBUSY;
+	ic = &((struct qwz_softc *)qd->dev)->sc_ic;
+	ifp = &ic->ic_if;
+	qwzmac_spl_lock();
+	if (!memcmp(ic->ic_myaddr, mac, 6)) { qwzmac_spl_unlock(); return 0; }
+	was_up = !!(ifp->if_flags & IFF_UP);
+	qwzmac_spl_unlock();
+	printf("QwzWifi: applying runtime MAC (recreating firmware vdev)\n");
+	error = qwzmac_ifflags(ifp, 0);
+	if (error) return error;
+	qwzmac_spl_lock();
+	memcpy(((struct arpcom *)ifp)->ac_enaddr, mac, 6);
+	memcpy(ic->ic_myaddr, mac, 6);
+	qwzmac_spl_unlock();
+	return was_up ? qwzmac_ifflags(ifp, 1) : 0;
+}
+
+int
+qwzmac_qwz_native_join(void *p, struct qwzmac_native_join *request)
+{
+	struct qwzmac_dev *qd = p;
+	struct qwz_softc *sc;
+	struct ieee80211com *ic;
+	struct ifnet *ifp;
+	int error = EINVAL;
+	if (request == NULL) return EINVAL;
+	if (request->ssid_len == 0 || request->ssid_len > 32 ||
+	    (request->bssid[0] & 1)) goto wipe;
+	if (qwzmac_mgmt_busy(qd)) { error = EBUSY; goto wipe; }
+	sc = (struct qwz_softc *)qd->dev;
+	ic = &sc->sc_ic;
+	ifp = &ic->ic_if;
+	error = qwzmac_qwz_native_leave(p);
+	if (error) goto wipe;
+	printf("QwzWifi: native join accepted by net80211\n");
+	rw_enter_write(&sc->ioctl_rwl);
+	qwzmac_spl_lock();
+	if (!(ifp->if_flags & IFF_RUNNING)) { error = ENETDOWN; goto unlock; }
+	/* Keys, scan parameters and the target change as one net80211 operation. */
+	ieee80211_disable_rsn(ic);
+	ieee80211_disable_wep(ic);
+	explicit_bzero(ic->ic_psk, sizeof(ic->ic_psk));
+	memcpy(qd->ssid, request->ssid, request->ssid_len);
+	qd->ssid_len = request->ssid_len;
+	explicit_bzero(qd->psk, sizeof(qd->psk));
+	if (request->secured) memcpy(qd->psk, request->pmk, sizeof(qd->psk));
+	ifp->if_qwzmac_scan_pending = 0;
+	ifp->if_qwzmac_beacon_length = 0;
+	error = request->secured ? qwzmac_set_network(qd, ifp, qwzmac_ioctl80211) :
+	    qwzmac_set_nwid(ifp, qd->ssid, qd->ssid_len, qwzmac_ioctl80211);
+	if (!error) {
+		memcpy(ic->ic_des_bssid, request->bssid, 6);
+		ic->ic_flags |= IEEE80211_F_DESBSSID;
+		/* Same live transition as HeliPort, without firmware reload. */
+		ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
+	}
+	/* net80211 owns the PMK now; don't retain an extra management copy. */
+	explicit_bzero(qd->psk, sizeof(qd->psk));
+unlock:
+	if (error) {
+		explicit_bzero(ic->ic_psk, sizeof(ic->ic_psk));
+		explicit_bzero(qd->psk, sizeof(qd->psk));
+	}
+	qwzmac_spl_unlock();
+	rw_exit(&sc->ioctl_rwl);
+wipe:
+	explicit_bzero(request->pmk, sizeof(request->pmk));
+	return error;
+}
+
+int
+qwzmac_qwz_native_status(void *p, struct qwzmac_native_status *status)
+{
+	struct qwzmac_dev *qd = p;
+	struct ieee80211com *ic;
+	struct ifnet *ifp;
+	memset(status, 0, sizeof(*status));
+	if (qwzmac_mgmt_busy(qd)) return EBUSY;
+	qwzmac_spl_lock();
+	ic = &((struct qwz_softc *)qd->dev)->sc_ic;
+	ifp = &ic->ic_if;
+	qwzmac_qwz_sta_info(p, &status->station); /* recursive spl lock */
+	if (ic->ic_state == IEEE80211_S_RUN && ic->ic_bss && ic->ic_bss->ni_chan &&
+	    ic->ic_bss->ni_chan != IEEE80211_CHAN_ANYC) {
+		qwzmac_copy_bss(ic, ic->ic_bss, &status->bss);
+		status->authorized = ifp->if_link_state >= LINK_STATE_UP &&
+		    (!(ic->ic_flags & IEEE80211_F_RSNON) || ic->ic_bss->ni_port_valid);
+		status->beacon_sequence = ifp->if_qwzmac_beacon_sequence;
+		status->beacon_length = ifp->if_qwzmac_beacon_length;
+		memcpy(status->beacon, ifp->if_qwzmac_beacon, status->beacon_length);
+	}
+	qwzmac_spl_unlock();
+	return 0;
+}
+
+int
+qwzmac_qwz_native_leave(void *p)
+{
+	struct qwzmac_dev *qd = p;
+	int error = qwzmac_qwz_leave(p);
+	if (qd != NULL && qd->attached) {
+		struct qwz_softc *sc = (struct qwz_softc *)qd->dev;
+		rw_enter_write(&sc->ioctl_rwl);
+		qwzmac_spl_lock();
+		ieee80211_disable_rsn(&sc->sc_ic);
+		explicit_bzero(sc->sc_ic.ic_psk, sizeof(sc->sc_ic.ic_psk));
+		explicit_bzero(qd->psk, sizeof(qd->psk));
+		qd->have_net = 0;
+		qwzmac_spl_unlock();
+		rw_exit(&sc->ioctl_rwl);
+	}
+	return error;
 }

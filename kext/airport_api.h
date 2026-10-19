@@ -27,7 +27,7 @@ extern "C" {
 #endif
 
 /* Bumped on any change of the structures below; both sides must agree. */
-#define QWZ_AIRPORT_API_VERSION	4
+#define QWZ_AIRPORT_API_VERSION	6
 #define QWZ_AIRPORT_CONNECT	"QwzAirportConnect"
 #define QWZ_AIRPORT_DISCONNECT	"QwzAirportDisconnect"
 
@@ -69,6 +69,13 @@ struct qwz_airport_driver {
 	int (*scan_poll)(void *dev, uint32_t generation);
 	/* Only nodes actually heard during this successfully completed ticket. */
 	int (*scan_snapshot)(void *dev, uint32_t ticket, struct qwzmac_scan_bss *out, int max);
+	/* True only when the Ethernet fallback is withheld for this front. */
+	int (*data_owner)(void *dev);
+	int (*set_mac)(void *dev, const uint8_t mac[6]);
+	int (*join)(void *dev, struct qwzmac_native_join *);
+	int (*leave)(void *dev);
+	int (*join_status)(void *dev, struct qwzmac_native_status *);
+	int (*output)(void *dev, const void *frame, size_t len);
 };
 
 /* Driver -> front, filled by QwzAirport. */
@@ -82,6 +89,9 @@ struct qwz_airport_front {
 	 * the front's gate. The data is only valid during the call.
 	 */
 	void	(*event)(void *cookie, int event, const void *data, size_t len);
+	/* RX under the driver's recursive spl lock: copy before returning,
+	 * NEVER acquire the WCL gate here. Disconnect drains this too. */
+	void (*input)(void *cookie, const void *frame, size_t len);
 };
 
 #ifdef __cplusplus

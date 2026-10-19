@@ -25,6 +25,14 @@ public:
 	bool initWithController(QwzAirport *controller);
 	void free() override;
 	void stopScans();
+	void stopJoins();
+	bool macBusy();
+	void queueMacAddress(const uint8_t[6]);
+	IOReturn setWCL_ASSOCIATE(apple80211AssocCandidates *) override;
+	IOReturn setWCL_JOIN_ABORT(apple80211_wcl_abort_join *) override;
+	IOReturn setWCL_LEAVE_NETWORK(apple80211_leave_network *) override;
+	IOReturn getWCL_BSS_INFO(apple80211_beacon_msg *) override;
+	IOReturn getBEACON_INFO(apple80211_beacon_info_t *) override;
 	IOReturn setWCL_SCAN_REQ(apple80211ScanRequest *) override;
 	IOReturn setWCL_SCAN_ABORT(void *) override;
 
@@ -48,6 +56,26 @@ public:
 
 private:
 	void postDriverAvailable(bool available);
+	static void joinTc(thread_call_param_t, thread_call_param_t);
+	static IOReturn joinCommand(OSObject *, void *, void *, void *, void *);
+	void finishJoin(IOReturn);
+	void disconnectJoin();
+	void scheduleJoin(unsigned, uint32_t);
+	struct JoinBatch { uint32_t serial; int operation, error; qwzmac_native_status *status; };
+	enum { JoinIdle, JoinApply, JoinPoll, JoinLeave };
+	IOLock *fJoinLock;
+	thread_call_t fJoinTc;
+	bool fMacPending, fMacApplying;
+	int fMacError;
+	uint8_t fMacAddress[6];
+	bool fJoinStopping, fJoinPending, fJoinAssociated, fJoined;
+	int fJoinOperation;
+	uint32_t fJoinSerial, fJoinPolls;
+	uint8_t fJoinBSSID[6];
+	qwzmac_native_join fJoinRequest;
+	uint8_t fJoinBssInfo[sizeof(AirportWCL::BeaconMetadata) + 0x800];
+	uint8_t fJoinBeaconInfo[0x808];
+	bool fJoinBssValid;
 	static void scanTc(thread_call_param_t, thread_call_param_t);
 	static IOReturn scanCommand(OSObject *, void *, void *, void *, void *);
 	void finishScan(IOReturn);

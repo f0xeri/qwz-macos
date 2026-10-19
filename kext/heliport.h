@@ -15,6 +15,8 @@
 
 #include <stdint.h>
 
+#define QWZ_IOCTL_HELIPORT_MODE 0x51575a01u /* privileged, no payload */
+
 #define HP_IOCTL_MASK		0x800000
 #define HP_IOCTL_VERSION	1
 #define HP_NWID_LEN		32

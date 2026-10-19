@@ -8,8 +8,8 @@
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>CFBundleName</key><string>QwzWifi</string>
 	<key>CFBundlePackageType</key><string>KEXT</string>
-	<key>CFBundleShortVersionString</key><string>0.0.14</string>
-	<key>CFBundleVersion</key><string>0.0.14</string>
+	<key>CFBundleShortVersionString</key><string>0.0.16</string>
+	<key>CFBundleVersion</key><string>0.0.16</string>
 	<key>IOKitPersonalities</key>
 	<dict>
 		<key>QwzWifi</key>
@@ -20,6 +20,7 @@
 			<key>QwzInterfaceName</key><string>Qualcomm Wi-Fi</string>
 			<key>IOProviderClass</key><string>IOPCIDevice</string>
 			<key>IOPCIPrimaryMatch</key><string>0x110717cb</string>
+			<key>QwzNativeData</key><true/>
 			<key>IOProbeScore</key><integer>1000</integer>
 		</dict>
 	</dict>

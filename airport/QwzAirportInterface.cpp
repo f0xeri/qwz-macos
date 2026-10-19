@@ -14,6 +14,7 @@
  */
 #include "QwzAirportInterface.hpp"
 #include "Scan.hpp"
+#include "Join.hpp"
 #include <kern/clock.h>
 #include <sys/errno.h>
 
@@ -27,10 +28,29 @@ bool
 QwzAirportInterface::initWithController(QwzAirport *controller)
 {
 	ether_addr addr;
+	fCtl = nullptr;
+	fScanLock = fJoinLock = nullptr;
+	fScanTc = fJoinTc = nullptr;
 
 	if (!IO80211InfraInterface::init())
 		return false;
 	fCtl = controller;
+	fJoinLock = IOLockAlloc();
+	fJoinTc = nullptr;
+	fJoinStopping = fJoinPending = fJoinAssociated = fJoined = fJoinBssValid = false;
+	fMacPending = fMacApplying = false;
+	fMacError = 0;
+	bzero(fMacAddress, sizeof(fMacAddress));
+	fJoinOperation = JoinIdle;
+	fJoinSerial = fJoinPolls = 0;
+	bzero(&fJoinRequest, sizeof(fJoinRequest));
+	bzero(fJoinBSSID, sizeof(fJoinBSSID));
+	bzero(fJoinBssInfo, sizeof(fJoinBssInfo));
+	bzero(fJoinBeaconInfo, sizeof(fJoinBeaconInfo));
+	if (fJoinLock == nullptr) return false;
+	fJoinTc = thread_call_allocate_with_options(joinTc, this,
+	    THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
+	if (fJoinTc == nullptr) return false;
 	fRadioLifecycle = {};
 	fScanLock = IOLockAlloc();
 	fScanTc = nullptr;
@@ -51,7 +71,9 @@ QwzAirportInterface::initWithController(QwzAirport *controller)
 void
 QwzAirportInterface::free()
 {
+	stopJoins();
 	stopScans();
+	if (fJoinLock != nullptr) { IOLockFree(fJoinLock); fJoinLock = nullptr; }
 	if (fScanLock != nullptr) {
 		IOLockFree(fScanLock);
 		fScanLock = nullptr;
@@ -76,8 +98,21 @@ QwzAirportInterface::postDriverAvailable(bool available)
 void
 QwzAirportInterface::radioChanged(int state)
 {
-	if (state == QWZMAC_RADIO_GOING_DOWN || state == QWZMAC_RADIO_DOWN)
+	if (state == QWZMAC_RADIO_GOING_DOWN || state == QWZMAC_RADIO_DOWN) {
 		finishScan(kIOReturnAborted);
+		finishJoin(kIOReturnOffline);
+		disconnectJoin();
+		IOLockLock(fJoinLock);
+		++fJoinSerial;
+		fJoinOperation = JoinIdle;
+		QwzJoin::wipe(&fJoinRequest, sizeof(fJoinRequest));
+		IOLockUnlock(fJoinLock);
+	}
+	if (state == QWZMAC_RADIO_UP) {
+		IOLockLock(fJoinLock);
+		if (!fMacApplying && !fMacPending) fMacError = 0;
+		IOLockUnlock(fJoinLock);
+	}
 	// GOING_DOWN and DOWN may arrive separately or be coalesced. Pair
 	// exactly one reset begin with the ready completion in either case.
 	unsigned actions = QwzRadio::transition(fRadioLifecycle, state);
@@ -260,6 +295,9 @@ QwzAirportInterface::setWCL_UPDATE_FAST_LANE(apple80211_fastlane *data)
 IOReturn
 QwzAirportInterface::setMacAddress(mloAddrArray &addresses)
 {
+	uint8_t current[6];
+	fCtl->macAddress(current);
+	if (fJoinPending && memcmp(current, &addresses, 6)) return kIOReturnBusy;
 	return fCtl->setHardwareAddress(&addresses, 6);
 }
 
@@ -338,6 +376,7 @@ IOReturn QwzAirportInterface::scanCommand(OSObject *, void *a0, void *a1,
 		return kIOReturnUnsupported;
 	}
 	if (!self->fCtl->radioOn()) return kIOReturnNotReady;
+	if (self->fJoinPending) return kIOReturnBusy;
 	IOLockLock(self->fScanLock);
 	if (self->fScanStopping || self->fScanPending) {
 		IOLockUnlock(self->fScanLock);
@@ -427,5 +466,286 @@ void QwzAirportInterface::stopScans()
 		}
 		thread_call_free(fScanTc);
 		fScanTc = nullptr;
+	}
+}
+
+IOReturn QwzAirportInterface::setWCL_ASSOCIATE(apple80211AssocCandidates *request)
+{
+	return fCtl->gate()->runAction(joinCommand, this, (void *)1, request);
+}
+IOReturn QwzAirportInterface::setWCL_JOIN_ABORT(apple80211_wcl_abort_join *)
+{
+	return fCtl->gate()->runAction(joinCommand, this, (void *)2);
+}
+IOReturn QwzAirportInterface::setWCL_LEAVE_NETWORK(apple80211_leave_network *)
+{
+	return fCtl->gate()->runAction(joinCommand, this, (void *)3);
+}
+IOReturn QwzAirportInterface::getWCL_BSS_INFO(apple80211_beacon_msg *out)
+{
+	return fCtl->gate()->runAction(joinCommand, this, (void *)5, out);
+}
+IOReturn QwzAirportInterface::getBEACON_INFO(apple80211_beacon_info_t *out)
+{
+	return fCtl->gate()->runAction(joinCommand, this, (void *)6, out);
+}
+
+void QwzAirportInterface::finishJoin(IOReturn error)
+{
+	if (!fJoinPending) return;
+	fJoinPending = false;
+	AirportWCL::ConnectionEvent event = {};
+	event.status = error ? 1 : 0;
+	event.reason = error == kIOReturnTimeout ? 1004 : 0;
+	memcpy(event.peers[0].bssid, fJoinBSSID, 6);
+	event.peers[0].driverStatus = error;
+	fCtl->setProperty("QwzAirportJoinStatus", static_cast<uint32_t>(error), 32);
+	fCtl->postMessage(this, AirportWCL::ConnectComplete, &event, sizeof(event), true);
+}
+void QwzAirportInterface::disconnectJoin()
+{
+	if (fJoined) {
+		AirportWCL::LinkStatusEvent event = {};
+		memcpy(event.bssid, fJoinBSSID, 6);
+		event.reason = 255;
+		fCtl->postMessage(this, AirportWCL::LinkStatus, &event, sizeof(event), true);
+	}
+	fJoined = fJoinAssociated = fJoinBssValid = false;
+	fCtl->nativeLink(false, 0);
+}
+
+IOReturn QwzAirportInterface::joinCommand(OSObject *, void *a0, void *a1,
+    void *a2, void *)
+{
+	auto self = static_cast<QwzAirportInterface *>(a0);
+	unsigned operation = static_cast<unsigned>(reinterpret_cast<uintptr_t>(a1));
+	if (operation == 8) {
+		int error = *static_cast<int *>(a2);
+		IOLockLock(self->fJoinLock);
+		self->fMacApplying = false;
+		self->fMacError = error;
+		bool stopped = self->fJoinStopping;
+		uint32_t serial = self->fJoinSerial;
+		IOLockUnlock(self->fJoinLock);
+		self->fCtl->setProperty("QwzAirportMACStatus", static_cast<uint32_t>(error), 32);
+		if (stopped) return kIOReturnAborted;
+		if (error && self->fJoinPending) {
+			self->finishJoin(kIOReturnError);
+			self->disconnectJoin();
+			IOLockLock(self->fJoinLock);
+			self->fJoinOperation = JoinLeave;
+			IOLockUnlock(self->fJoinLock);
+		}
+		self->scheduleJoin(0, serial);
+		return error ? kIOReturnError : kIOReturnSuccess;
+	}
+	if (operation == 5 || operation == 6) {
+		if (!a2 || !self->fJoinBssValid) return kIOReturnNotReady;
+		if (operation == 5) memcpy(a2, self->fJoinBssInfo, sizeof(self->fJoinBssInfo));
+		else memcpy(a2, self->fJoinBeaconInfo, sizeof(self->fJoinBeaconInfo));
+		return kIOReturnSuccess;
+	}
+	if (!self->fCtl->nativeDataMode()) return kIOReturnNotReady;
+	if (operation == 4) {
+		auto batch = static_cast<JoinBatch *>(a2);
+		IOLockLock(self->fJoinLock);
+		bool valid = !self->fJoinStopping && self->fJoinSerial == batch->serial;
+		IOLockUnlock(self->fJoinLock);
+		if (!valid) return kIOReturnAborted;
+		if (batch->operation == JoinLeave) {
+			IOLockLock(self->fJoinLock);
+			self->fJoinOperation = JoinIdle;
+			IOLockUnlock(self->fJoinLock);
+			return kIOReturnSuccess;
+		}
+		if (batch->error) {
+			self->finishJoin(kIOReturnError);
+			self->disconnectJoin();
+			IOLockLock(self->fJoinLock);
+			self->fJoinOperation = JoinLeave;
+			IOLockUnlock(self->fJoinLock);
+			self->scheduleJoin(0, batch->serial);
+			return kIOReturnSuccess;
+		}
+		if (!batch->status) {
+			self->scheduleJoin(250, batch->serial);
+			return kIOReturnSuccess;
+		}
+		const auto &status = *batch->status;
+		bool samePeer = status.station.state == 4 &&
+		    !memcmp(status.station.bssid, self->fJoinBSSID, 6);
+		if (samePeer) {
+			QwzScan::Message message;
+			size_t size = QwzScan::encode(status.bss, message);
+			if (size) {
+				bzero(self->fJoinBssInfo, sizeof(self->fJoinBssInfo));
+				memcpy(self->fJoinBssInfo, &message, size);
+			}
+			if (status.beacon_length >= 36 && status.beacon_length <= 2048) {
+				bzero(self->fJoinBeaconInfo, sizeof(self->fJoinBeaconInfo));
+				memcpy(self->fJoinBeaconInfo, &status.beacon_length, 4);
+				memcpy(self->fJoinBeaconInfo + 4, status.beacon, status.beacon_length);
+				self->fJoinBssValid = size != 0;
+			}
+			if (!self->fJoinAssociated) {
+				self->fJoinAssociated = true;
+				AirportWCL::AssociationEvent event = {};
+				memcpy(event.bssid, self->fJoinBSSID, 6);
+				self->fCtl->postMessage(self, AirportWCL::AssocComplete, &event, sizeof(event), true);
+			}
+		}
+		if (!self->fJoined && self->fJoinPending && self->fJoinBssValid &&
+		    QwzJoin::connected(status, self->fJoinBSSID)) {
+			self->fJoined = true;
+			AirportWCL::LinkStatusEvent link = {};
+			memcpy(link.bssid, self->fJoinBSSID, 6); link.up = 1; link.reason = 255;
+			self->fCtl->postMessage(self, AirportWCL::LinkStatus, &link, sizeof(link), true);
+			AirportWCL::FirstBeaconEvent beacon = {};
+			memcpy(beacon.peer.bssid, self->fJoinBSSID, 6);
+			self->fCtl->postMessage(self, AirportWCL::FirstBeacon, &beacon, sizeof(beacon), true);
+			self->fCtl->nativeLink(true, status.station.rate_bps);
+			self->finishJoin(kIOReturnSuccess);
+		}
+		if (self->fJoined && (!samePeer || !status.authorized)) {
+			self->disconnectJoin();
+			IOLockLock(self->fJoinLock);
+			self->fJoinOperation = JoinIdle;
+			IOLockUnlock(self->fJoinLock);
+			return kIOReturnSuccess;
+		}
+		if (self->fJoinPending && self->fJoinPolls >= 120) {
+			self->finishJoin(kIOReturnTimeout);
+			self->disconnectJoin();
+			IOLockLock(self->fJoinLock);
+			self->fJoinOperation = JoinLeave;
+			IOLockUnlock(self->fJoinLock);
+			self->scheduleJoin(0, batch->serial);
+		} else self->scheduleJoin(self->fJoined ? 1000 : 250, batch->serial);
+		return kIOReturnSuccess;
+	}
+	if (operation == 2 || operation == 3) {
+		self->finishJoin(kIOReturnAborted);
+		self->disconnectJoin();
+		IOLockLock(self->fJoinLock);
+		QwzJoin::wipe(&self->fJoinRequest, sizeof(self->fJoinRequest));
+		uint32_t serial = ++self->fJoinSerial;
+		self->fJoinOperation = JoinLeave;
+		IOLockUnlock(self->fJoinLock);
+		self->scheduleJoin(0, serial);
+		if (operation == 2)
+			self->fCtl->postMessage(self, AirportWCL::JoinAbortComplete, nullptr, 0, true);
+		return kIOReturnSuccess;
+	}
+	if (operation != 1 || !a2) return kIOReturnBadArgument;
+	AirportWCL::JoinRequest wire = {};
+	qwzmac_native_join request = {};
+	bool decoded = AirportWCL::decodeJoin(a2, 0x2cc, wire);
+	bool supported = decoded && QwzJoin::translate(wire, request);
+	QwzJoin::wipe(&wire, sizeof(wire));
+	self->fCtl->setProperty("QwzAirportJoinDecoded", decoded);
+	self->fCtl->setProperty("QwzAirportJoinSupported", supported);
+	if (!supported) { QwzJoin::wipe(&request, sizeof(request)); return decoded ? kIOReturnUnsupported : kIOReturnBadArgument; }
+	if (!self->fCtl->radioOn() || self->fJoinPending) {
+		QwzJoin::wipe(&request, sizeof(request)); return kIOReturnBusy;
+	}
+	IOLockLock(self->fJoinLock);
+	bool busy = self->fJoinStopping || self->fJoinOperation == JoinLeave || self->fMacError;
+	IOLockUnlock(self->fJoinLock);
+	if (busy) { QwzJoin::wipe(&request, sizeof(request)); return kIOReturnBusy; }
+	self->finishScan(kIOReturnAborted);
+	self->disconnectJoin();
+	IOLockLock(self->fJoinLock);
+	self->fJoinRequest = request;
+	self->fJoinPending = true;
+	self->fJoinOperation = JoinApply;
+	self->fJoinPolls = 0;
+	memcpy(self->fJoinBSSID, request.bssid, 6);
+	uint32_t serial = ++self->fJoinSerial;
+	IOLockUnlock(self->fJoinLock);
+	QwzJoin::wipe(&request, sizeof(request));
+	self->fCtl->setProperty("QwzAirportJoinRequested", serial, 32);
+	self->scheduleJoin(0, serial);
+	return kIOReturnSuccess;
+}
+
+void QwzAirportInterface::scheduleJoin(unsigned milliseconds, uint32_t serial)
+{
+	IOLockLock(fJoinLock);
+	if (!fJoinStopping && fJoinSerial == serial && fJoinOperation != JoinIdle) {
+		if (!milliseconds) thread_call_enter(fJoinTc);
+		else {
+			uint64_t deadline;
+			clock_interval_to_deadline(milliseconds, kMillisecondScale, &deadline);
+			thread_call_enter_delayed(fJoinTc, deadline);
+		}
+	}
+	IOLockUnlock(fJoinLock);
+}
+bool QwzAirportInterface::macBusy()
+{
+	IOLockLock(fJoinLock);
+	bool busy = fMacPending || fMacApplying || fJoinStopping;
+	IOLockUnlock(fJoinLock);
+	return busy;
+}
+void QwzAirportInterface::queueMacAddress(const uint8_t mac[6])
+{
+	finishScan(kIOReturnAborted);
+	disconnectJoin();
+	IOLockLock(fJoinLock);
+	if (!fJoinStopping) {
+		memcpy(fMacAddress, mac, 6);
+		fMacPending = true;
+		fMacError = 0;
+		thread_call_enter(fJoinTc);
+	}
+	IOLockUnlock(fJoinLock);
+}
+void QwzAirportInterface::joinTc(thread_call_param_t p0, thread_call_param_t)
+{
+	auto self = static_cast<QwzAirportInterface *>(p0);
+	IOLockLock(self->fJoinLock);
+	if (!self->fJoinStopping && self->fMacPending) {
+		uint8_t mac[6];
+		memcpy(mac, self->fMacAddress, 6);
+		self->fMacPending = false;
+		self->fMacApplying = true;
+		IOLockUnlock(self->fJoinLock);
+		const auto driver = self->fCtl->driver();
+		int error = driver->set_mac(driver->dev, mac);
+		self->fCtl->gate()->runAction(joinCommand, self, (void *)8, &error);
+		return;
+	}
+	if (self->fJoinStopping || self->fJoinOperation == JoinIdle) {
+		IOLockUnlock(self->fJoinLock); return;
+	}
+	JoinBatch batch = {self->fJoinSerial, self->fJoinOperation, 0, nullptr};
+	qwzmac_native_join request = self->fJoinRequest;
+	QwzJoin::wipe(&self->fJoinRequest, sizeof(self->fJoinRequest));
+	if (batch.operation == JoinApply) self->fJoinOperation = JoinPoll;
+	++self->fJoinPolls;
+	IOLockUnlock(self->fJoinLock);
+	const auto driver = self->fCtl->driver();
+	if (batch.operation == JoinApply) batch.error = driver->join(driver->dev, &request);
+	else if (batch.operation == JoinLeave) batch.error = driver->leave(driver->dev);
+	else {
+		batch.status = static_cast<qwzmac_native_status *>(IOMalloc(sizeof(*batch.status)));
+		batch.error = batch.status ? driver->join_status(driver->dev, batch.status) : ENOMEM;
+	}
+	QwzJoin::wipe(&request, sizeof(request));
+	self->fCtl->gate()->runAction(joinCommand, self, (void *)4, &batch);
+	if (batch.status) IOFree(batch.status, sizeof(*batch.status));
+}
+void QwzAirportInterface::stopJoins()
+{
+	if (!fJoinLock) return;
+	IOLockLock(fJoinLock);
+	fJoinStopping = true;
+	++fJoinSerial;
+	QwzJoin::wipe(&fJoinRequest, sizeof(fJoinRequest));
+	IOLockUnlock(fJoinLock);
+	if (fJoinTc) {
+		while (thread_call_isactive(fJoinTc)) { thread_call_cancel(fJoinTc); IOSleep(5); }
+		thread_call_free(fJoinTc); fJoinTc = nullptr;
 	}
 }

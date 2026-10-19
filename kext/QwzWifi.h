@@ -21,7 +21,7 @@
 
 #define QLOG(fmt, ...) qwzmac_log("QwzWifi: " fmt "\n", ##__VA_ARGS__)
 
-#define QWZ_VERSION	"0.0.10"
+#define QWZ_VERSION	"0.0.16"
 
 class QwzWifi : public IOEthernetController {
 	OSDeclareDefaultStructors(QwzWifi)
@@ -59,6 +59,14 @@ public:
 	/* "en4", or "" before the interface is published. */
 	void bsdName(char *buf, size_t len);
 
+	IOReturn requestHeliportMode();
+	bool nativeDataMode() const {
+		IOLockLock(fIfLock);
+		bool native = (fNativePreferred || fHeliportRequested) && fNetIf == nullptr;
+		IOLockUnlock(fIfLock);
+		return native;
+	}
+
 private:
 	void logDevice(IOPCIDevice *pci);
 	void nameInterface(IONetworkInterface *netif);
@@ -89,6 +97,14 @@ private:
 	static int dvScanStart(void *, const qwzmac_scan_request *, uint32_t *);
 	static int dvScanPoll(void *, uint32_t);
 	static int dvScanSnapshot(void *, uint32_t, qwzmac_scan_bss *, int);
+	static int dvSetMac(void *, const uint8_t[6]);
+	static int dvDataOwner(void *);
+	static int dvJoin(void *, qwzmac_native_join *);
+	static int dvLeave(void *);
+	static int dvJoinStatus(void *, qwzmac_native_status *);
+	static int dvOutput(void *, const void *, size_t);
+	static void modeTc(thread_call_param_t, thread_call_param_t);
+	void publishEthernet();
 
 	IOPCIDevice	*fPci;
 	void		*fQwz;
@@ -99,6 +115,9 @@ private:
 	IOLock		*fIfLock;	/* fNetIf vs. stop() */
 	IOEthernetInterface *fNetIf;
 	bool		 fStopping;
+	bool fNativePreferred;
+	bool fHeliportRequested;
+	thread_call_t fModeTc;
 	IONetworkMedium	*fMedium;	/* retained */
 	uint8_t		 fMac[6];
 

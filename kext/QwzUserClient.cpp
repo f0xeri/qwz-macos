@@ -120,6 +120,14 @@ QwzUserClient::externalMethod(uint32_t selector,
     IOExternalMethodArguments *args, IOExternalMethodDispatch *dispatch,
     OSObject *target, void *reference)
 {
+	if (selector == QWZ_IOCTL_HELIPORT_MODE) {
+		if (clientHasPrivilege(current_task(), kIOClientPrivilegeAdministrator) != kIOReturnSuccess)
+			return kIOReturnNotPrivileged;
+		if (args->structureInputSize || args->structureOutputSize ||
+		    args->scalarInputCount || args->scalarOutputCount)
+			return kIOReturnBadArgument;
+		return fDriver->requestHeliportMode();
+	}
 	bool set = (selector & HP_IOCTL_MASK) != 0;
 	uint32_t id = selector & ~(uint32_t)HP_IOCTL_MASK;
 	void *buf;
@@ -143,6 +151,11 @@ QwzUserClient::externalMethod(uint32_t selector,
 		bzero(buf, sReqSize[id]);
 	}
 
+	if (fDriver->nativeDataMode()) {
+		if (set && (id == HP_IOCTL_ASSOCIATE || id == HP_IOCTL_JOIN || id == HP_IOCTL_WPA_KEY))
+			bzero(buf, sReqSize[id]);
+		return kIOReturnExclusiveAccess;
+	}
 	if (!fDriver->clientEnter())
 		return kIOReturnNotReady;
 	IOLockLock(fLock);

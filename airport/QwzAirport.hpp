@@ -41,7 +41,7 @@ static inline void qwz_airport_log(const char *format, ...)
 }
 #define ALOG(...) qwz_airport_log(__VA_ARGS__)
 
-#define QWZ_AIRPORT_VERSION	"0.2.4"
+#define QWZ_AIRPORT_VERSION	"0.3.0"
 
 class QwzAirportInterface;
 class QwzAirportEthernet;
@@ -102,6 +102,9 @@ public:
 	IOCommandGate *gate() const { return fGate; }
 	bool radioOn() const { return fPowerState != 0; }
 	void bsdAttached();
+	bool nativeDataMode() const { return fNativeData; }
+	void nativeLink(bool up, uint64_t rate);
+	static void frontInput(void *, const void *, size_t);
 	void bsdDetached();
 	void macAddress(uint8_t mac[6]) const { memcpy(mac, fMac, sizeof(fMac)); }
 
@@ -121,6 +124,8 @@ private:
 	qwz_airport_driver	 fDrv;
 	qwz_airport_front	 fFront;
 	bool			 fConnected;
+	bool fNativeData;
+	volatile unsigned fNativeLinkUp;
 	uint8_t			 fMac[6];
 
 	IO80211WorkQueue	*fWorkQueue;

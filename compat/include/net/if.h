@@ -132,6 +132,8 @@ struct ifnet {
 	struct qwzmac_scan_request if_qwzmac_scan_request;
 	uint32_t if_qwzmac_scan_ticket, if_qwzmac_scan_active, if_qwzmac_scan_done;
 	int if_qwzmac_scan_pending, if_qwzmac_scan_done_error;
+	uint32_t if_qwzmac_beacon_sequence, if_qwzmac_beacon_length;
+	uint8_t if_qwzmac_beacon[2048];
 };
 
 #define if_ipackets	if_data_counters[ifc_ipackets]

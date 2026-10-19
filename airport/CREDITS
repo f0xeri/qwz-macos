@@ -27,3 +27,8 @@ Ours: kext/airport_api.h and its implementation in kext/QwzWifi.cpp, compat/auto
 qwzmac_qwz_channels()/qwzmac_qwz_country()/radio callback, QWZMAC patches in qwz,
 scripts/airport-stubs.py (QwzAirportStubs.inc), scripts/kc-abi.py, scripts/kc-classsize.py,
 scripts/kclib.py, scripts/airport-vendor.sh.
+
+C4 MAC reconfiguration / deferred-join ordering was compared with
+mnnobre/AirportMtkWlan b880d9cd155ba076ae86dc02556f215fd82723d5
+(AirportItlwmV2.cpp and WCL/WCL.cpp), itself based on laobamac/itlwm.
+https://github.com/mnnobre/AirportMtkWlan

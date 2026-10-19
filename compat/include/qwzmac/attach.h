@@ -164,6 +164,22 @@ int qwzmac_qwz_scan_start(void *dev, const struct qwzmac_scan_request *, uint32_
 int qwzmac_qwz_scan_poll(void *dev, uint32_t generation);
 int qwzmac_qwz_scan_snapshot(void *dev, uint32_t ticket, struct qwzmac_scan_bss *out, int max);
 
+/* C4: PMK is already derived by macOS; never treat it as a password. */
+struct qwzmac_native_join {
+	uint8_t ssid[32], ssid_len, bssid[6], secured;
+	uint8_t pmk[32];
+};
+struct qwzmac_native_status {
+	struct qwzmac_sta_info station;
+	struct qwzmac_scan_bss bss;
+	uint32_t authorized, beacon_sequence, beacon_length;
+	uint8_t beacon[2048];
+};
+int qwzmac_qwz_set_mac(void *, const uint8_t[6]);
+int qwzmac_qwz_native_join(void *, struct qwzmac_native_join *);
+int qwzmac_qwz_native_leave(void *);
+int qwzmac_qwz_native_status(void *, struct qwzmac_native_status *);
+
 struct qwzmac_chan {
 	unsigned	channel;	/* IEEE channel number */
 	unsigned	freq_mhz;
