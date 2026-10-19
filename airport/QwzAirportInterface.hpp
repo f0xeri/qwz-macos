@@ -1,8 +1,7 @@
 /*
  * QwzAirportInterface: the Wi-Fi interface macOS's Wi-Fi stack (WCL) talks
  * to (an IO80211InfraProtocol). Stage C2: power, capabilities, channels,
- * state and the driver availability messages; scan (C3) and join (C4) are
- * not there yet.
+ * state, availability and full scan (C3); join (C4) is not there yet.
  *
  * Based on AirportItlwmSkywalkInterface and WCL of laobamac/itlwm 738d4c6
  * (AirportItlwm/AirportItlwmSkywalkInterface.cpp, WCL/WCL.cpp): message
@@ -18,12 +17,16 @@
 
 #include "QwzAirport.hpp"
 #include "WCL.hpp"
+#include "RadioLifecycle.hpp"
 
 class QwzAirportInterface : public IO80211InfraProtocol {
 	OSDeclareDefaultStructors(QwzAirportInterface)
 public:
 	bool initWithController(QwzAirport *controller);
 	void free() override;
+	void stopScans();
+	IOReturn setWCL_SCAN_REQ(apple80211ScanRequest *) override;
+	IOReturn setWCL_SCAN_ABORT(void *) override;
 
 	/* Driver (QwzWifi) radio state, QWZMAC_RADIO_*; in the gate. */
 	void radioChanged(int state);
@@ -45,10 +48,26 @@ public:
 
 private:
 	void postDriverAvailable(bool available);
+	static void scanTc(thread_call_param_t, thread_call_param_t);
+	static IOReturn scanCommand(OSObject *, void *, void *, void *, void *);
+	void finishScan(IOReturn);
+	void scheduleScan(unsigned milliseconds, uint32_t serial);
+	struct ScanBatch {
+		uint32_t serial;
+		qwzmac_scan_bss *networks;
+		int count;
+		IOReturn status;
+	};
+	IOLock *fScanLock;
+	thread_call_t fScanTc;
+	bool fScanStopping, fScanPending, fScanStarted;
+	uint32_t fScanSerial, fScanGeneration, fScanPolls;
+	uint32_t fScanAccepted, fScanCompleted;
+	AirportWCL::ScanRequest fScanRequest;
 
 	QwzAirport	*fCtl;
 	uint8_t		 fPermanentMAC[6];
-	bool		 fAvailable;	/* last DriverAvailable we posted */
+	QwzRadio::State fRadioLifecycle;
 };
 
 #endif /* QWZ_AIRPORT_INTERFACE_HPP */

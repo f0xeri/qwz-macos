@@ -1,0 +1,18 @@
+diff --git a/sys/net80211/ieee80211_input.c b/sys/net80211/ieee80211_input.c
+--- a/sys/net80211/ieee80211_input.c
++++ b/sys/net80211/ieee80211_input.c
+@@ -2092,6 +2092,14 @@ ieee80211_recv_probe_resp(struct ieee80211com *ic, struct mbuf *m,
+ 		memcpy(ni->ni_essid, &ssid[2], ssid[1]);
+ 	}
+ 	IEEE80211_ADDR_COPY(ni->ni_bssid, wh->i_addr3);
++#ifdef QWZMAC
++	/* QWZMAC: do not refresh WCL from old cached nodes. Tag only actual
++	 * beacons/probe responses received during the native hardware cycle.
++	 * Restart the RSSI maximum on its first frame, not across all scans. */
++	if (qwzmac_scan_observe(&ni->ni_qwzmac_scan_seen,
++	    ic->ic_if.if_qwzmac_scan_active))
++		ni->ni_rssi = rxi->rxi_rssi;
++#endif
+ 	if (ic->ic_state == IEEE80211_S_SCAN &&
+ 	    IEEE80211_IS_CHAN_5GHZ(ni->ni_chan)) {
+ 		/*

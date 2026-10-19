@@ -52,6 +52,7 @@ QwzAirportEthernet::attachToDataLinkLayer(IOOptionBits options, void *parameter)
 	UInt8 builtIn = 0;
 	IOReturn ret;
 
+	ALOG("BSD attach: enter");
 	/* Subtype 3: Wi-Fi, as Apple's drivers set it. */
 	if (!qwz_setInterfaceSubType(this, 3))
 		return kIOReturnNotReady;
@@ -75,6 +76,7 @@ QwzAirportEthernet::attachToDataLinkLayer(IOOptionBits options, void *parameter)
 	if (ctl->getHardwareAddress(&addr) == kIOReturnSuccess)
 		setProperty(kIOMACAddress, (void *)&addr, kIOEthernetAddressSize);
 
+	ALOG("BSD attach: prepareBSDInterface enter");
 	ret = ctl->gate()->runAction(prepareBSDGated, this);
 	if (ret != kIOReturnSuccess) {
 		ALOG("prepareBSDInterface failed: 0x%x", ret);
@@ -84,6 +86,7 @@ QwzAirportEthernet::attachToDataLinkLayer(IOOptionBits options, void *parameter)
 	}
 	fAttached = true;
 	fInterface->registerService();
+	ctl->bsdAttached();
 	ALOG("BSD interface %s attached", name);
 	return kIOReturnSuccess;
 }
@@ -91,6 +94,9 @@ QwzAirportEthernet::attachToDataLinkLayer(IOOptionBits options, void *parameter)
 void
 QwzAirportEthernet::detachFromDataLinkLayer(IOOptionBits options, void *parameter)
 {
+	QwzAirport *ctl = OSDynamicCast(QwzAirport, getController());
+	if (ctl != nullptr)
+		ctl->bsdDetached();
 	super::detachFromDataLinkLayer(options, parameter);
 	fAttached = false;
 }

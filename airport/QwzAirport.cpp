@@ -1,8 +1,8 @@
 /*
  * QwzAirport: the IO80211Controller (QwzAirport.hpp).
  *
- * Loaded by hand during development (sudo kmutil load -p build/QwzAirport.kext):
- * it matches the running QwzWifi, connects through callPlatformFunction()
+ * Injected by OpenCore: it matches QwzAirportNub after asynchronous build
+ * validation. The nub forwards callPlatformFunction() to the running QwzWifi
  * (kext/airport_api.h) and publishes a Wi-Fi interface. QwzWifi keeps its
  * Ethernet interface and HeliPort; the data path moves here in stage C4.
  *
@@ -27,8 +27,11 @@ OSDefineMetaClassAndStructors(QwzAirport, IO80211Controller);
 bool
 QwzAirport::init(OSDictionary *properties)
 {
-	if (!super::init(properties))
+	ALOG("init: enter IO80211Controller::init");
+	if (!super::init(properties)) {
+		ALOG("init: IO80211Controller::init returned false");
 		return false;
+	}
 	fQwz = nullptr;
 	bzero(&fDrv, sizeof(fDrv));
 	bzero(&fFront, sizeof(fFront));
@@ -41,12 +44,22 @@ QwzAirport::init(OSDictionary *properties)
 	fPowerState = 0;
 	fPowerWanted = 0;
 	fPowerTc = nullptr;
+	fRadioTc = nullptr;
+	fLifecycleLock = nullptr;
+	fLifecycle = 0;
+	fRadioState = QWZMAC_RADIO_DOWN;
 	fLogPipe = fDataPathPipe = fSnapshotsPipe = nullptr;
 	fLogPipeStarted = fDataPathPipeStarted = fSnapshotsPipeStarted = false;
 	fLogger = nullptr;
 	fFaultStream = nullptr;
 	fCoreFaultReporter = nullptr;
 	fFaultReporter = nullptr;
+	fLifecycleLock = IOLockAlloc();
+	if (fLifecycleLock == nullptr) {
+		ALOG("init: IOLockAlloc failed");
+		return false;
+	}
+	ALOG("init: complete");
 	return true;
 }
 
@@ -58,25 +71,80 @@ QwzAirport::init(OSDictionary *properties)
 IOService *
 QwzAirport::probe(IOService *provider, SInt32 *score)
 {
+	ALOG("probe: enter");
 	char build[32] = "";
 	size_t len = sizeof(build);
 	OSArray *builds;
 	bool ok = false;
 
-	if (sysctlbyname("kern.osversion", build, &len, nullptr, 0) != 0)
+	provider->setProperty("QwzAirportProbeResult", "reading kern.osversion");
+	int error = sysctlbyname("kern.osversion", build, &len, nullptr, 0);
+	if (error != 0)
 		build[0] = '\0';
 	builds = OSDynamicCast(OSArray, getProperty("QwzAirportBuilds"));
+	ALOG("probe: kern.osversion='%s', errno=%d, length=%lu, allowlist=%u",
+	    build, error, (unsigned long)len, builds ? builds->getCount() : 0);
+	provider->setProperty("QwzAirportDetectedBuild", build);
 	for (unsigned i = 0; builds != nullptr && i < builds->getCount(); i++) {
 		OSString *b = OSDynamicCast(OSString, builds->getObject(i));
 		if (b != nullptr && b->isEqualTo(build))
 			ok = true;
 	}
 	if (!ok) {
+		provider->setProperty("QwzAirportProbeResult", error ?
+		    "kern.osversion failed" : "build not allowlisted");
 		ALOG("macOS build %s is not in QwzAirportBuilds (its IO80211 ABI was "
 		    "not checked with scripts/kc-abi.py --check): not starting", build);
 		return nullptr;
 	}
-	return super::probe(provider, score);
+	IOService *result = super::probe(provider, score);
+	provider->setProperty("QwzAirportProbeResult", result ? "accepted" : "super probe refused");
+	ALOG("probe: %s", result ? "accepted" : "super probe refused");
+	return result;
+}
+
+/* Also visible in ioreg if startup fails while the rest of macOS boots. */
+void
+QwzAirport::trace(const char *stage)
+{
+	setProperty("QwzAirportStage", stage);
+	if (fQwz != nullptr)
+		fQwz->setProperty("QwzAirportStage", stage);
+	ALOG("stage: %s", stage);
+}
+
+/* Called without our gate held. No callback may use the interfaces after this. */
+void
+QwzAirport::stopAsync()
+{
+	if (fNetIf != nullptr)
+		fNetIf->stopScans();
+	if (fLifecycleLock != nullptr)
+		IOLockLock(fLifecycleLock);
+	__atomic_fetch_or(&fLifecycle, (unsigned)Stopping, __ATOMIC_SEQ_CST);
+	if (fLifecycleLock != nullptr)
+		IOLockUnlock(fLifecycleLock);
+	if (fConnected) {
+		fQwz->callPlatformFunction(QWZ_AIRPORT_DISCONNECT, false,
+		    fFront.cookie, nullptr, nullptr, nullptr);
+		fConnected = false;
+	}
+	if (fRadioTc != nullptr) {
+		while (thread_call_isactive(fRadioTc)) {
+			thread_call_cancel(fRadioTc);
+			IOSleep(5);
+		}
+		thread_call_free(fRadioTc);
+		fRadioTc = nullptr;
+	}
+	if (fPowerTc != nullptr) {
+		while (thread_call_isactive(fPowerTc)) {
+			thread_call_cancel(fPowerTc);
+			IOSleep(5);
+		}
+		thread_call_free(fPowerTc);
+		fPowerTc = nullptr;
+	}
 }
 
 bool
@@ -102,10 +170,12 @@ QwzAirport::initCCLogs()
 	strlcpy(o.directory_name, "WiFi", sizeof(o.directory_name));
 	o.pad9 = 0x1000000;
 	o.pad10 = 2;
+	trace("CoreCapture log pipe factory");
 	fLogPipe = CCPipe::withOwnerNameCapacity(this, "com.local.QwzAirport",
 	    "DriverLogs", &o);
 	if (fLogPipe == nullptr || getWorkLoop() == nullptr)
 		return false;
+	trace("CoreCapture log pipe start");
 	fLogPipeStarted = fLogPipe->CCPipe::startPipe();
 	if (!fLogPipeStarted)
 		return false;
@@ -131,6 +201,7 @@ QwzAirport::initCCLogs()
 	    "DatapathEvents", &o);
 	if (fDataPathPipe == nullptr)
 		return false;
+	trace("CoreCapture data pipe start");
 	fDataPathPipeStarted = fDataPathPipe->CCPipe::startPipe();
 	if (!fDataPathPipeStarted)
 		return false;
@@ -146,6 +217,7 @@ QwzAirport::initCCLogs()
 	    "StateSnapshots", &o);
 	if (fSnapshotsPipe == nullptr)
 		return false;
+	trace("CoreCapture snapshots pipe start");
 	fSnapshotsPipeStarted = fSnapshotsPipe->CCPipe::startPipe();
 	if (!fSnapshotsPipeStarted)
 		return false;
@@ -157,6 +229,7 @@ QwzAirport::initCCLogs()
 	CCDataStream *ds = OSDynamicCast(CCDataStream, fFaultStream);
 	if (ds == nullptr || fWorkQueue == nullptr)
 		return false;
+	trace("CoreCapture fault reporter");
 	fCoreFaultReporter = CCFaultReporter::withStreamWorkloop(ds, fWorkQueue);
 	if (fCoreFaultReporter == nullptr)
 		return false;
@@ -167,6 +240,7 @@ QwzAirport::initCCLogs()
 void
 QwzAirport::releaseAll()
 {
+	stopAsync();
 	OSSafeReleaseNULL(fFaultReporter);
 	OSSafeReleaseNULL(fCoreFaultReporter);
 	OSSafeReleaseNULL(fFaultStream);
@@ -182,20 +256,6 @@ QwzAirport::releaseAll()
 	OSSafeReleaseNULL(fLogPipe);
 	OSSafeReleaseNULL(fDataPathPipe);
 	OSSafeReleaseNULL(fSnapshotsPipe);
-	if (fConnected) {
-		/* No QwzWifi event runs or starts once this returns. */
-		fQwz->callPlatformFunction(QWZ_AIRPORT_DISCONNECT, false,
-		    fFront.cookie, nullptr, nullptr, nullptr);
-		fConnected = false;
-	}
-	if (fPowerTc != nullptr) {
-		while (thread_call_isactive(fPowerTc)) {
-			thread_call_cancel(fPowerTc);
-			IOSleep(5);
-		}
-		thread_call_free(fPowerTc);
-		fPowerTc = nullptr;
-	}
 	if (fWorkQueue != nullptr) {
 		if (fGate != nullptr) {
 			fWorkQueue->removeEventSource(fGate);
@@ -214,6 +274,7 @@ QwzAirport::start(IOService *provider)
 
 	ALOG("start, version " QWZ_AIRPORT_VERSION " (built " __DATE__ " " __TIME__ ")");
 	fQwz = provider;
+	trace("connect QwzWifi");
 
 	fFront.version = QWZ_AIRPORT_API_VERSION;
 	fFront.size = sizeof(fFront);
@@ -233,9 +294,26 @@ QwzAirport::start(IOService *provider)
 		releaseAll();
 		return false;
 	}
+	/* QWZMAC: C2 keeps QwzWifi's real en interface alive. A second
+	 * interface with its MAC is assigned the same persisted en unit by
+	 * configd (en4 here), and naming fails with kIOReturnNoSpace. Give
+	 * this control-only front a distinct locally administered unicast
+	 * identity. No firmware/vdev MAC is changed; replace this arrangement
+	 * when C4 transfers ownership of the real data interface.
+	 */
+	fMac[0] = (fMac[0] | 0x02) & 0xfe;
+	fMac[5] ^= 0x01; // distinct even if the hardware MAC is already local
+	trace("create work queue");
+	fRadioTc = thread_call_allocate(radioTc, this);
 	fPowerTc = thread_call_allocate(powerTc, this);
-	fWorkQueue = IO80211WorkQueue::workQueue();
-	if (fPowerTc == nullptr || fWorkQueue == nullptr) {
+	// QWZMAC: share the provider queue, as in laobamac's wrapper. On
+	// 25G241 IO80211WorkQueue::getThread() returns NULL; a different
+	// provider loop makes IONetworkController::start pass it to
+	// ml_thread_policy and panic. Each owner holds its own reference.
+	fWorkQueue = OSDynamicCast(IO80211WorkQueue, provider->getWorkLoop());
+	if (fWorkQueue != nullptr)
+		fWorkQueue->retain();
+	if (fRadioTc == nullptr || fPowerTc == nullptr || fWorkQueue == nullptr) {
 		releaseAll();
 		return false;
 	}
@@ -245,16 +323,19 @@ QwzAirport::start(IOService *provider)
 	setProperty("built-in", bi);
 	OSSafeReleaseNULL(bi);
 	setProperty("DriverKitDriver", kOSBooleanFalse);
+	trace("CoreCapture init");
 	if (!initCCLogs()) {
 		ALOG("CoreCapture pipes or fault reporter failed");
 		releaseAll();
 		return false;
 	}
+	trace("IO80211Controller::start enter");
 	if (!super::start(provider)) {
 		ALOG("IO80211Controller::start failed");
 		releaseAll();
 		return false;
 	}
+	trace("IO80211Controller::start complete");
 	fGate = IOCommandGate::commandGate(this);
 	if (fGate == nullptr || fWorkQueue->addEventSource(fGate) != kIOReturnSuccess) {
 		OSSafeReleaseNULL(fGate);
@@ -270,6 +351,7 @@ QwzAirport::start(IOService *provider)
 		return false;
 	}
 
+	trace("Wi-Fi interface init");
 	fNetIf = new QwzAirportInterface;
 	if (fNetIf == nullptr || !fNetIf->initWithController(this)) {
 		ALOG("Wi-Fi interface init failed");
@@ -278,17 +360,20 @@ QwzAirport::start(IOService *provider)
 		releaseAll();
 		return false;
 	}
+	trace("Wi-Fi interface attach");
 	fNetIf->setInterfaceRole(1);
 	fNetIf->setInterfaceId(1);
 	if (!fNetIf->attach(this) || !attachInterface(fNetIf, this)) {
 		ALOG("cannot attach the Wi-Fi interface");
 		goto fail;
 	}
+	trace("BSD interface create");
 	/* The BSD interface: createInterface() below; registered at the end. */
 	if (!IONetworkController::attachInterface((IONetworkInterface **)&fBsdIf, false)) {
 		ALOG("cannot attach the BSD interface");
 		goto fail;
 	}
+	trace("registration info init");
 	bzero(&reg, sizeof(reg));
 	if (!fNetIf->initRegistrationInfo(&reg, 1, sizeof(reg))) {
 		ALOG("initRegistrationInfo failed");
@@ -310,23 +395,38 @@ QwzAirport::start(IOService *provider)
 	memcpy(fNetIf->mExpansionData2->fRegistrationInfo, &reg, sizeof(reg));
 	/* Frames go through fBsdIf, not through Skywalk. */
 	fNetIf->deferBSDAttach(true);
+	trace("Wi-Fi interface start enter");
 	if (!fNetIf->start(this)) {
 		ALOG("Wi-Fi interface start failed");
 		goto fail;
 	}
 	setLinkStatus(kIONetworkLinkValid);
+	trace("Wi-Fi interface started; publish BSD");
 	fBsdIf->registerService();
 	registerService();
 
+	/*
+	 * registerService() schedules BSD attachment; it does not complete it.
+	 * WCL's synchronous ready messages must wait for prepareBSDInterface()
+	 * AND for startup to finish. Do not enter WCL from this matching thread.
+	 */
 	fPowerState = fDrv.power(fDrv.dev) ? 1 : 0;
-	/* Tell WCL whether the driver is available (later: frontEvent()). */
-	fGate->runAction(radioGated, (void *)(intptr_t)(fPowerState ?
-	    QWZMAC_RADIO_UP : QWZMAC_RADIO_DOWN));
+	__atomic_store_n(&fRadioState, fPowerState ? QWZMAC_RADIO_UP :
+	    QWZMAC_RADIO_DOWN, __ATOMIC_SEQ_CST);
+	trace("controller started; waiting for BSD attachment");
+	__atomic_fetch_or(&fLifecycle, (unsigned)Started, __ATOMIC_SEQ_CST);
+	scheduleRadio();
 	ALOG("started, radio %s", fPowerState ? "on" : "off");
 	return true;
 
 fail:
+	stopAsync();
 	super::stop(provider);
+	/* BSD keeps a reference to the Skywalk interface: detach it first. */
+	if (fBsdIf != nullptr) {
+		IONetworkController::detachInterface(fBsdIf, true);
+		OSSafeReleaseNULL(fBsdIf);
+	}
 	if (fNetIf != nullptr) {
 		detachInterface(fNetIf, true);
 		OSSafeReleaseNULL(fNetIf);
@@ -341,12 +441,7 @@ QwzAirport::stop(IOService *provider)
 	QwzAirportInterface *netif = fNetIf;
 
 	ALOG("stop");
-	/* First no more QwzWifi events into the interface. */
-	if (fConnected) {
-		fQwz->callPlatformFunction(QWZ_AIRPORT_DISCONNECT, false,
-		    fFront.cookie, nullptr, nullptr, nullptr);
-		fConnected = false;
-	}
+	stopAsync();
 	if (fGate != nullptr)
 		fGate->runAction(radioGated, (void *)(intptr_t)QWZMAC_RADIO_DOWN);
 	fNetIf = nullptr;
@@ -367,20 +462,60 @@ void
 QwzAirport::free()
 {
 	releaseAll();
+	if (fLifecycleLock != nullptr) {
+		IOLockFree(fLifecycleLock);
+		fLifecycleLock = nullptr;
+	}
 	super::free();
 }
 
-/* QwzWifi's event thread (kext/airport_api.h): never our work loop. */
+/* The provider callback only records state; it never waits on our gate. */
 void
 QwzAirport::frontEvent(void *cookie, int event, const void *data, size_t len)
 {
 	QwzAirport *me = (QwzAirport *)cookie;
 	int state;
 
-	if (event != QWZ_AIRPORT_EV_RADIO || len != sizeof(state) || me->fGate == nullptr)
+	if (event != QWZ_AIRPORT_EV_RADIO || data == nullptr || len != sizeof(state))
 		return;
 	memcpy(&state, data, sizeof(state));
-	me->fGate->runAction(radioGated, (void *)(intptr_t)state);
+	__atomic_store_n(&me->fRadioState, state, __ATOMIC_SEQ_CST);
+	me->scheduleRadio();
+}
+
+void
+QwzAirport::bsdAttached()
+{
+	__atomic_fetch_or(&fLifecycle, (unsigned)BSDAttached, __ATOMIC_SEQ_CST);
+	scheduleRadio();
+}
+
+/* Serialize checking readiness + enqueue against stopAsync() freeing the call. */
+void
+QwzAirport::scheduleRadio()
+{
+	IOLockLock(fLifecycleLock);
+	if ((__atomic_load_n(&fLifecycle, __ATOMIC_SEQ_CST) &
+	    (Started | BSDAttached | Stopping)) == (Started | BSDAttached))
+		thread_call_enter(fRadioTc);
+	IOLockUnlock(fLifecycleLock);
+}
+
+void
+QwzAirport::bsdDetached()
+{
+	__atomic_fetch_and(&fLifecycle, ~(unsigned)BSDAttached, __ATOMIC_SEQ_CST);
+}
+
+void
+QwzAirport::radioTc(thread_call_param_t p0, thread_call_param_t)
+{
+	QwzAirport *me = (QwzAirport *)p0;
+	if ((__atomic_load_n(&me->fLifecycle, __ATOMIC_SEQ_CST) &
+	    (Started | BSDAttached | Stopping)) != (Started | BSDAttached))
+		return;
+	me->fGate->runAction(radioGated,
+	    (void *)(intptr_t)__atomic_load_n(&me->fRadioState, __ATOMIC_SEQ_CST));
 }
 
 IOReturn
@@ -393,8 +528,11 @@ QwzAirport::radioGated(OSObject *owner, void *a0, void *, void *, void *)
 		me->fPowerState = 1;
 	else if (state == QWZMAC_RADIO_DOWN)
 		me->fPowerState = 0;
-	if (me->fNetIf != nullptr)
+	if (me->fNetIf != nullptr &&
+	    (__atomic_load_n(&me->fLifecycle, __ATOMIC_SEQ_CST) & BSDAttached))
 		me->fNetIf->radioChanged(state);
+	me->trace(state == QWZMAC_RADIO_UP ? "native interface ready" :
+	    state == QWZMAC_RADIO_DOWN ? "radio off" : "radio stopping");
 	return kIOReturnSuccess;
 }
 
@@ -406,7 +544,8 @@ QwzAirport::powerTc(thread_call_param_t p0, thread_call_param_t)
 	int on = __atomic_load_n(&me->fPowerWanted, __ATOMIC_SEQ_CST);
 	int error;
 
-	if (!me->fConnected || me->fDrv.power(me->fDrv.dev) == on)
+	if ((__atomic_load_n(&me->fLifecycle, __ATOMIC_SEQ_CST) & Stopping) ||
+	    !me->fConnected || me->fDrv.power(me->fDrv.dev) == on)
 		return;
 	error = me->fDrv.set_power(me->fDrv.dev, on);
 	ALOG("radio %s: %d", on ? "on" : "off", error);
@@ -664,10 +803,17 @@ QwzAirport::setPOWER(IO80211SkywalkInterface *, apple80211_power_data *pd)
 		return kIOReturnError;
 	if (pd->num_radios == 0)
 		return kIOReturnSuccess;
+	IOLockLock(fLifecycleLock);
+	if ((__atomic_load_n(&fLifecycle, __ATOMIC_SEQ_CST) & Stopping) ||
+	    fPowerTc == nullptr) {
+		IOLockUnlock(fLifecycleLock);
+		return kIOReturnNotReady;
+	}
 	ALOG("setPOWER %u", pd->power_state[0]);
 	fPowerState = pd->power_state[0] ? 1 : 0;
 	__atomic_store_n(&fPowerWanted, (int)fPowerState, __ATOMIC_SEQ_CST);
 	thread_call_enter(fPowerTc);
+	IOLockUnlock(fLifecycleLock);
 	return kIOReturnSuccess;
 }
 

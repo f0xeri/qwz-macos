@@ -146,6 +146,24 @@ struct qwzmac_bss {
 /* Copy up to max networks from the last scans; returns how many. */
 int	qwzmac_qwz_scan_results(void *dev, struct qwzmac_bss *out, int max);
 
+/* Native observations for one completed ticket (not the entire BSS cache).
+ * Only real beacon/probe RX during that scan tags a node.
+ * Security IE copied unchanged from net80211.
+ * SSID/rates/channel IEs are reconstructed from the same cached node. */
+struct qwzmac_scan_bss {
+	uint8_t ssid[32], ssid_len, bssid[6];
+	uint16_t channel, interval, capability, ie_len;
+	int32_t rssi_dbm;
+	uint8_t ies[384];
+};
+struct qwzmac_scan_request {
+	uint8_t active, restricted, ssid_len;
+	uint8_t ssid[32], channels[32], bssid[6];
+};
+int qwzmac_qwz_scan_start(void *dev, const struct qwzmac_scan_request *, uint32_t *ticket);
+int qwzmac_qwz_scan_poll(void *dev, uint32_t generation);
+int qwzmac_qwz_scan_snapshot(void *dev, uint32_t ticket, struct qwzmac_scan_bss *out, int max);
+
 struct qwzmac_chan {
 	unsigned	channel;	/* IEEE channel number */
 	unsigned	freq_mhz;

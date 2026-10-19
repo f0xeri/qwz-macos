@@ -21,12 +21,27 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/network/IOEthernetController.h>
 #include <kern/thread_call.h>
+#include <os/log.h>
+#include <stdarg.h>
 
 #include "../kext/airport_api.h"
 
-#define ALOG(fmt, ...) IOLog("QwzAirport: " fmt "\n", ##__VA_ARGS__)
+/* IOLog reaches the boot console; os_log preserves the same line for log show. */
+static inline void qwz_airport_log(const char *format, ...)
+    __attribute__((format(printf, 1, 2)));
+static inline void qwz_airport_log(const char *format, ...)
+{
+	char text[384];
+	va_list ap;
+	va_start(ap, format);
+	vsnprintf(text, sizeof(text), format, ap);
+	va_end(ap);
+	IOLog("QwzAirport: %s\n", text);
+	os_log(OS_LOG_DEFAULT, "QwzAirport: %{public}s", text);
+}
+#define ALOG(...) qwz_airport_log(__VA_ARGS__)
 
-#define QWZ_AIRPORT_VERSION	"0.1.0"
+#define QWZ_AIRPORT_VERSION	"0.2.3"
 
 class QwzAirportInterface;
 class QwzAirportEthernet;
@@ -86,9 +101,15 @@ public:
 	const qwz_airport_driver *driver() const { return &fDrv; }
 	IOCommandGate *gate() const { return fGate; }
 	bool radioOn() const { return fPowerState != 0; }
+	void bsdAttached();
+	void bsdDetached();
 	void macAddress(uint8_t mac[6]) const { memcpy(mac, fMac, sizeof(fMac)); }
 
 private:
+	void trace(const char *stage);
+	void stopAsync();
+	void scheduleRadio();
+	static void radioTc(thread_call_param_t, thread_call_param_t);
 	bool initCCLogs();
 	void releaseAll();
 	bool createMediumTables();
@@ -110,6 +131,12 @@ private:
 	uint8_t			 fPowerState;	/* what WCL set (setPOWER) */
 	volatile int		 fPowerWanted;	/* for powerTc() */
 	thread_call_t		 fPowerTc;
+	thread_call_t		 fRadioTc;
+	/* Atomic rendezvous between start(), BSD attachment and radio events. */
+	enum { Started = 1, BSDAttached = 2, Stopping = 4 };
+	IOLock			*fLifecycleLock;
+	unsigned		 fLifecycle;
+	int			 fRadioState;
 
 	CCPipe			*fLogPipe;
 	CCPipe			*fDataPathPipe;

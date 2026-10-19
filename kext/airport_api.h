@@ -27,7 +27,7 @@ extern "C" {
 #endif
 
 /* Bumped on any change of the structures below; both sides must agree. */
-#define QWZ_AIRPORT_API_VERSION	1
+#define QWZ_AIRPORT_API_VERSION	4
 #define QWZ_AIRPORT_CONNECT	"QwzAirportConnect"
 #define QWZ_AIRPORT_DISCONNECT	"QwzAirportDisconnect"
 
@@ -61,6 +61,14 @@ struct qwz_airport_driver {
 	int	(*channels)(void *dev, struct qwzmac_chan *out, int max);
 	/* Association state, see qwzmac_qwz_sta_info(). */
 	int	(*sta_info)(void *dev, struct qwzmac_sta_info *si);
+	/* Arm a scan with these parameters; ticket identifies the actual
+	 * hardware cycle that consumes them. Poll returns EINPROGRESS until
+	 * that ticket ends, then 0 or errno (including forced-cleanup errors).
+	 * Never wait for firmware while holding the WCL gate. */
+	int (*scan_start)(void *dev, const struct qwzmac_scan_request *, uint32_t *ticket);
+	int (*scan_poll)(void *dev, uint32_t generation);
+	/* Only nodes actually heard during this successfully completed ticket. */
+	int (*scan_snapshot)(void *dev, uint32_t ticket, struct qwzmac_scan_bss *out, int max);
 };
 
 /* Driver -> front, filled by QwzAirport. */

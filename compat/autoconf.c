@@ -1233,3 +1233,117 @@ qwzmac_qwz_country(void *p, char cc[3])
 	qwzmac_spl_unlock();
 	return error;
 }
+
+/* Native scans run outside the front's WCL gate; all net80211 access is
+ * serialized by spl. A request during continuous SCAN configures the next hardware cycle. */
+int
+qwzmac_qwz_scan_start(void *p, const struct qwzmac_scan_request *request,
+    uint32_t *ticket)
+{
+	struct qwzmac_dev *qd = p;
+	struct ieee80211com *ic;
+	struct ifnet *ifp;
+	int error = 0, usable = 0;
+	unsigned c;
+	if (ticket == NULL || request == NULL || request->ssid_len > 32)
+		return EINVAL;
+	if (qwzmac_mgmt_busy(qd)) return EBUSY;
+	qwzmac_spl_lock();
+	ic = &((struct qwz_softc *)qd->dev)->sc_ic;
+	ifp = &ic->ic_if;
+	for (c = 1; c <= IEEE80211_CHAN_MAX && c < 256; ++c)
+		if (ic->ic_channels[c].ic_flags && (!request->restricted ||
+		    (request->channels[c / 8] & (1U << (c % 8))))) usable = 1;
+	if (!usable) error = EOPNOTSUPP;
+	else if (!(ifp->if_flags & IFF_RUNNING)) error = ENETDOWN;
+	else if (ic->ic_state != IEEE80211_S_RUN && ic->ic_state != IEEE80211_S_SCAN)
+		error = EBUSY;
+	else if (ic->ic_state == IEEE80211_S_RUN && (ic->ic_flags & IEEE80211_F_BGSCAN))
+		error = EBUSY; /* do not commandeer a scan already owned by HeliPort */
+	if (!error) {
+		ifp->if_qwzmac_scan_request = *request;
+		ifp->if_qwzmac_scan_pending = 1;
+		if (++ifp->if_qwzmac_scan_ticket == 0) ++ifp->if_qwzmac_scan_ticket;
+		*ticket = ifp->if_qwzmac_scan_ticket;
+		if (ic->ic_state == IEEE80211_S_RUN) {
+			ieee80211_begin_bgscan(ifp);
+			if (!(ic->ic_flags & IEEE80211_F_BGSCAN)) {
+				ifp->if_qwzmac_scan_pending = 0;
+				error = EBUSY;
+			}
+		}
+	}
+	qwzmac_spl_unlock();
+	return error;
+}
+
+int
+qwzmac_qwz_scan_poll(void *p, uint32_t ticket)
+{
+	struct qwzmac_dev *qd = p;
+	struct ifnet *ifp;
+	int error;
+	if (qwzmac_mgmt_busy(qd)) return EBUSY;
+	qwzmac_spl_lock();
+	ifp = &((struct qwz_softc *)qd->dev)->sc_ic.ic_if;
+	if (!(ifp->if_flags & IFF_RUNNING)) error = ENETDOWN;
+	else if (ticket != ifp->if_qwzmac_scan_done) error = EINPROGRESS;
+	else error = ifp->if_qwzmac_scan_done_error;
+	qwzmac_spl_unlock();
+	return error;
+}
+
+int
+qwzmac_qwz_scan_snapshot(void *p, uint32_t ticket, struct qwzmac_scan_bss *out, int max)
+{
+	struct qwzmac_dev *qd = p;
+	struct ieee80211com *ic;
+	struct ieee80211_node *ni;
+	int n = 0;
+	if (out == NULL || max <= 0 || qwzmac_mgmt_busy(qd))
+		return 0;
+	qwzmac_spl_lock();
+	ic = &((struct qwz_softc *)qd->dev)->sc_ic;
+	/* Only the successfully completed request may publish observations. */
+	if (ticket == 0 || ic->ic_if.if_qwzmac_scan_done != ticket ||
+	    ic->ic_if.if_qwzmac_scan_done_error != 0) {
+		qwzmac_spl_unlock();
+		return 0;
+	}
+	RBT_FOREACH(ni, ieee80211_tree, &ic->ic_tree) {
+		struct qwzmac_scan_bss *b;
+		uint8_t *ie;
+		unsigned rates, channel;
+		if (n >= max) break;
+		/* Cache membership is not proof that the AP was heard this scan. */
+		if (!qwzmac_scan_observed(&ni->ni_qwzmac_scan_seen, ticket)) continue;
+		if (ni->ni_chan == NULL || ni->ni_chan == IEEE80211_CHAN_ANYC ||
+		    ni->ni_esslen > 32) continue;
+		channel = ieee80211_chan2ieee(ic, ni->ni_chan);
+		if (channel == 0 || channel > 196) continue;
+		b = &out[n++];
+		memset(b, 0, sizeof(*b));
+		b->ssid_len = ni->ni_esslen;
+		memcpy(b->ssid, ni->ni_essid, b->ssid_len);
+		memcpy(b->bssid, ni->ni_bssid, 6);
+		b->channel = channel;
+		b->interval = ni->ni_intval;
+		b->capability = ni->ni_capinfo;
+		b->rssi_dbm = QWZMAC_RSSI_DBM(ni);
+		ie = b->ies;
+		*ie++ = 0; *ie++ = b->ssid_len;
+		memcpy(ie, b->ssid, b->ssid_len); ie += b->ssid_len;
+		rates = MIN(ni->ni_rates.rs_nrates, 8);
+		*ie++ = 1; *ie++ = rates;
+		memcpy(ie, ni->ni_rates.rs_rates, rates); ie += rates;
+		*ie++ = 3; *ie++ = 1; *ie++ = channel;
+		/* Preserve RSN/WPA bytes; do not reinterpret security capabilities. */
+		if (ni->ni_rsnie != NULL) {
+			size_t len = (size_t)ni->ni_rsnie[1] + 2;
+			memcpy(ie, ni->ni_rsnie, len); ie += len;
+		}
+		b->ie_len = ie - b->ies; /* <= 34+10+3+257 = 304 */
+	}
+	qwzmac_spl_unlock();
+	return n;
+}

@@ -57,7 +57,65 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  #if 0
  	pdev_idx = reg_info->phy_id;
  
-@@ -20125,8 +20144,29 @@ qwz_hal_srng_setup(struct qwz_softc *sc, enum hal_ring_type type,
+@@ -11492,6 +11511,19 @@ qwz_wmi_event_scan_completed(struct qwz_softc *sc)
+ 		break;
+ 	case ATH12K_SCAN_RUNNING:
+ 	case ATH12K_SCAN_ABORTING:
++#ifdef QWZMAC
++		/* QWZMAC: count real firmware completions, not timeout cleanup. */
++		if (!sc->scan.is_roc) {
++			if (sc->scan.state == ATH12K_SCAN_ABORTING)
++				sc->sc_ic.ic_if.if_qwzmac_scan_error = ECANCELED;
++			sc->sc_ic.ic_if.if_qwzmac_scan_generation++;
++			if (sc->sc_ic.ic_if.if_qwzmac_scan_active) {
++				sc->sc_ic.ic_if.if_qwzmac_scan_done = sc->sc_ic.ic_if.if_qwzmac_scan_active;
++				sc->sc_ic.ic_if.if_qwzmac_scan_done_error = sc->sc_ic.ic_if.if_qwzmac_scan_error;
++				sc->sc_ic.ic_if.if_qwzmac_scan_active = 0;
++			}
++		}
++#endif
+ 		qwz_mac_scan_finish(sc);
+ 		break;
+ 	}
+@@ -11556,6 +11588,18 @@ qwz_wmi_event_scan_start_failed(struct qwz_softc *sc)
+ 		break;
+ 	case ATH12K_SCAN_STARTING:
+ 	case ATH12K_SCAN_ABORTING:
++#ifdef QWZMAC
++		/* QWZMAC: failed starts complete the native request with error. */
++		if (!sc->scan.is_roc) {
++			sc->sc_ic.ic_if.if_qwzmac_scan_error = EIO;
++			sc->sc_ic.ic_if.if_qwzmac_scan_generation++;
++			if (sc->sc_ic.ic_if.if_qwzmac_scan_active) {
++				sc->sc_ic.ic_if.if_qwzmac_scan_done = sc->sc_ic.ic_if.if_qwzmac_scan_active;
++				sc->sc_ic.ic_if.if_qwzmac_scan_done_error = sc->sc_ic.ic_if.if_qwzmac_scan_error;
++				sc->sc_ic.ic_if.if_qwzmac_scan_active = 0;
++			}
++		}
++#endif
+ 		wakeup(&sc->scan.state);
+ 		qwz_mac_scan_finish(sc);
+ 		break;
+@@ -11596,6 +11640,18 @@ qwz_scan_event(struct qwz_softc *sc, struct mbuf *m)
+ 	    scan_ev.scan_req_id, scan_ev.scan_id, scan_ev.vdev_id,
+ 	    qwz_scan_state_str(sc->scan.state), sc->scan.state);
+ 
++	/* QWZMAC: preserve firmware failure/abort reasons for native ScanDone.
++	 * Only actual firmware end/failure events advance the generation. */
++#ifdef QWZMAC
++	if (scan_ev.event_type == WMI_SCAN_EVENT_STARTED)
++		sc->sc_ic.ic_if.if_qwzmac_scan_error = 0;
++	else if (scan_ev.event_type == WMI_SCAN_EVENT_COMPLETED)
++		sc->sc_ic.ic_if.if_qwzmac_scan_error =
++		    scan_ev.reason == WMI_SCAN_REASON_COMPLETED ? 0 : EIO;
++	else if (scan_ev.event_type == WMI_SCAN_EVENT_START_FAILED ||
++	    scan_ev.event_type == WMI_SCAN_EVENT_DEQUEUED)
++		sc->sc_ic.ic_if.if_qwzmac_scan_error = EIO;
++#endif
+ 	switch (scan_ev.event_type) {
+ 	case WMI_SCAN_EVENT_STARTED:
+ 		qwz_wmi_event_scan_started(sc);
+@@ -20125,8 +20181,29 @@ qwz_hal_srng_setup(struct qwz_softc *sc, enum hal_ring_type type,
  		}
  	}
  
@@ -88,7 +146,26 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  
  	qwz_hal_srng_hw_init(sc, srng);
  
-@@ -24085,7 +24125,11 @@ qwz_start_scan(struct qwz_softc *sc, struct scan_req_params *arg)
+@@ -22488,6 +22565,18 @@ qwz_mac_scan_finish(struct qwz_softc *sc)
+ 	lockdep_assert_held(&ar->data_lock);
+ #endif
+ 	ostate = sc->scan.state;
++#ifdef QWZMAC
++	/* QWZMAC: real end/failure handlers already cleared the native ticket.
++	 * A remaining ticket here was forcibly cleaned up: fail it now, so a
++	 * later unrelated scan can never be mistaken for its completion. */
++	if (ostate != ATH12K_SCAN_IDLE && ifp->if_qwzmac_scan_active) {
++		ifp->if_qwzmac_scan_done = ifp->if_qwzmac_scan_active;
++		ifp->if_qwzmac_scan_done_error = ifp->if_qwzmac_scan_error ?
++		    ifp->if_qwzmac_scan_error : ETIMEDOUT;
++		ifp->if_qwzmac_scan_active = 0;
++	}
++#endif
++
+ 	switch (ostate) {
+ 	case ATH12K_SCAN_IDLE:
+ 		break;
+@@ -24085,7 +24174,11 @@ qwz_start_scan(struct qwz_softc *sc, struct scan_req_params *arg)
  #define ATH12K_MAC_SCAN_CMD_EVT_OVERHEAD		200 /* in msecs */
  
  int
@@ -100,7 +177,96 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  {
  	struct ieee80211com *ic = &sc->sc_ic;
  	struct qwz_vif *arvif = &sc->sc_vif;
-@@ -24219,7 +24263,11 @@ qwz_scan(struct qwz_softc *sc)
+@@ -24094,6 +24187,11 @@ qwz_scan(struct qwz_softc *sc)
+ 	int ret = 0, num_channels, i;
+ 	uint32_t scan_timeout;
+ 	int scan_2ghz = 1, scan_5ghz = 1;
++#ifdef QWZMAC
++	struct ifnet *native_ifp = &ic->ic_if;
++	struct qwzmac_scan_request native_request = {0};
++	uint32_t native_ticket = 0;
++#endif
+ 
+ 	/*
+ 	 * TODO Will we need separate scan iterations on devices with
+@@ -24137,6 +24235,16 @@ qwz_scan(struct qwz_softc *sc)
+ #endif
+ 	if (ret)
+ 		goto exit;
++#ifdef QWZMAC
++	/* QWZMAC: consume native parameters only at a new hardware scan.
++	 * An already running scan cannot satisfy this request's ticket. */
++	if (native_ifp->if_qwzmac_scan_pending) {
++		native_request = native_ifp->if_qwzmac_scan_request;
++		native_ticket = native_ifp->if_qwzmac_scan_ticket;
++		native_ifp->if_qwzmac_scan_active = native_ticket;
++		native_ifp->if_qwzmac_scan_pending = 0;
++	}
++#endif
+ 
+ 	arg = malloc(sizeof(*arg), M_DEVBUF, M_ZERO | M_NOWAIT);
+ 	if (!arg) {
+@@ -24148,6 +24256,21 @@ qwz_scan(struct qwz_softc *sc)
+ 	arg->vdev_id = arvif->vdev_id;
+ 	arg->scan_id = ATH12K_SCAN_ID;
+ 
++#ifdef QWZMAC
++	/* QWZMAC: WCL scan SSID is independent of the network HeliPort joined.
++	 * No country, channel flags or power tables are changed. */
++	if (native_ticket) {
++		if (!native_request.active)
++			arg->scan_flags |= WMI_SCAN_FLAG_PASSIVE;
++		else {
++			arg->scan_flags &= ~WMI_SCAN_FLAG_PASSIVE;
++			arg->num_ssids = 1;
++			arg->ssid[0].length = native_request.ssid_len;
++			memcpy(arg->ssid[0].ssid, native_request.ssid, native_request.ssid_len);
++		}
++		/* Default broadcast BSSID remains; directed BSSID is not supported. */
++	} else
++#endif
+ 	if (ic->ic_des_esslen != 0) {
+ 		arg->num_ssids = 1;
+ 		arg->ssid[0].length  = ic->ic_des_esslen;
+@@ -24169,11 +24292,22 @@ qwz_scan(struct qwz_softc *sc)
+ 	for (chan = &ic->ic_channels[1]; chan <= lastc; chan++) {
+ 		if (chan->ic_flags == 0)
+ 			continue;
++#ifdef QWZMAC
++		/* QWZMAC: restrict only the per-scan list, never regulatory data. */
++		if (native_ticket && native_request.restricted) {
++			unsigned c = ieee80211_chan2ieee(ic, chan);
++			if (c >= 256 || !(native_request.channels[c / 8] & (1U << (c % 8))))
++				continue;
++		}
++#endif
+ 		if ((!scan_2ghz && IEEE80211_IS_CHAN_2GHZ(chan)) ||
+ 		    (!scan_5ghz && IEEE80211_IS_CHAN_5GHZ(chan)))
+ 			continue;
+ 		num_channels++;
+ 	}
++#ifdef QWZMAC
++	if (native_ticket && num_channels == 0) { ret = EINVAL; goto exit; }
++#endif
+ 	if (num_channels) {
+ 		arg->num_chan = num_channels;
+ 		arg->chan_list = mallocarray(arg->num_chan,
+@@ -24188,6 +24322,14 @@ qwz_scan(struct qwz_softc *sc)
+ 		for (chan = &ic->ic_channels[1]; chan <= lastc; chan++) {
+ 			if (chan->ic_flags == 0)
+ 				continue;
++#ifdef QWZMAC
++			/* QWZMAC: use the same native filter as the allocation count. */
++			if (native_ticket && native_request.restricted) {
++				unsigned c = ieee80211_chan2ieee(ic, chan);
++				if (c >= 256 || !(native_request.channels[c / 8] & (1U << (c % 8))))
++					continue;
++			}
++#endif
+ 			if ((!scan_2ghz && IEEE80211_IS_CHAN_2GHZ(chan)) ||
+ 			    (!scan_5ghz && IEEE80211_IS_CHAN_5GHZ(chan)))
+ 				continue;
+@@ -24219,7 +24361,11 @@ qwz_scan(struct qwz_softc *sc)
  #ifdef notyet
  		spin_unlock_bh(&ar->data_lock);
  #endif
@@ -112,7 +278,22 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  		/*
  		 * The current mode might have been fixed during association.
  		 * Ensure all channels get scanned.
-@@ -24287,6 +24335,71 @@ qwz_scan_abort(struct qwz_softc *sc)
+@@ -24231,6 +24377,14 @@ qwz_scan(struct qwz_softc *sc)
+ 	timeout_add_msec(&sc->scan.timeout, scan_timeout);
+ #endif
+ exit:
++#ifdef QWZMAC
++	/* QWZMAC: command/allocation errors must finish this ticket too. */
++	if (native_ticket && ret) {
++		native_ifp->if_qwzmac_scan_done = native_ticket;
++		native_ifp->if_qwzmac_scan_done_error = ret;
++		native_ifp->if_qwzmac_scan_active = 0;
++	}
++#endif
+ 	if (arg) {
+ 		free(arg->chan_list, M_DEVBUF,
+ 		    arg->num_chan * sizeof(*arg->chan_list));
+@@ -24287,6 +24441,71 @@ qwz_scan_abort(struct qwz_softc *sc)
  #endif
  }
  
@@ -184,7 +365,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  /*
   * Find a pdev which corresponds to a given channel.
   * This doesn't exactly match the semantics of the Linux driver
-@@ -25072,6 +25185,9 @@ qwz_attach(struct qwz_softc *sc)
+@@ -25072,6 +25291,9 @@ qwz_attach(struct qwz_softc *sc)
  	task_set(&sc->newstate_task, qwz_newstate_task, sc);
  	task_set(&sc->setkey_task, qwz_setkey_task, sc);
  	task_set(&sc->ba_task, qwz_ba_task, sc);

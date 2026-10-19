@@ -340,13 +340,9 @@ QwzWifi::start(IOService *provider)
 	 */
 	setProperty("IOClass", "itlwm");
 	/*
-	 * IOEthernetController::start() does not register the controller;
-	 * unregistered, it is invisible to IOServiceGetMatchingServices()
-	 * and so to HeliPort (seen with 0.0.6: "!registered" in ioreg).
+	 * The network interface is published by netReady(), once the MAC is
+	 * known, and the controller is registered there too.
 	 */
-	registerService();
-
-	/* The network interface is published by netReady(), once the MAC is known. */
 	return true;
 }
 
@@ -464,6 +460,15 @@ QwzWifi::netReady(void *cookie, const uint8_t mac[6])
 	me->setLinkStatus(kIONetworkLinkValid);
 	QLOG("network interface %s%u published", netif->getNamePrefix(),
 	    netif->getUnitNumber());
+	/*
+	 * IOEthernetController::start() does not register the controller;
+	 * unregistered, it is invisible to IOServiceGetMatchingServices() and
+	 * so to HeliPort (seen with 0.0.6: "!registered" in ioreg). Register
+	 * only now: QwzAirport matches on the registered QwzWifi and needs the
+	 * MAC at once; injected by OpenCore it would otherwise start during
+	 * firmware bring-up and give up.
+	 */
+	me->registerService();
 }
 
 /* qwz context, spl lock held (serializes all calls). */
@@ -706,6 +711,9 @@ QwzWifi::frontConnect(const qwz_airport_front *front, qwz_airport_driver *driver
 	driver->country = dvCountry;
 	driver->channels = dvChannels;
 	driver->sta_info = dvStaInfo;
+	driver->scan_start = dvScanStart;
+	driver->scan_poll = dvScanPoll;
+	driver->scan_snapshot = dvScanSnapshot;
 	QLOG("airport: native Wi-Fi front connected");
 	/* Tell it where the radio is now; later changes come from netRadio(). */
 	frontQueue(qwzmac_qwz_power(fQwz) ? QWZMAC_RADIO_UP : QWZMAC_RADIO_DOWN);
@@ -958,4 +966,29 @@ QwzWifi::stop(IOService *provider)
 	fIfLock = nullptr;
 	IOSimpleLockFree(fRadioLock);
 	fRadioLock = nullptr;
+}
+
+int QwzWifi::dvScanStart(void *dev, const qwzmac_scan_request *request, uint32_t *generation)
+{
+	auto me = static_cast<QwzWifi *>(dev);
+	if (!me->clientEnter()) return ENXIO;
+	int error = qwzmac_qwz_scan_start(me->fQwz, request, generation);
+	me->clientExit();
+	return error;
+}
+int QwzWifi::dvScanPoll(void *dev, uint32_t generation)
+{
+	auto me = static_cast<QwzWifi *>(dev);
+	if (!me->clientEnter()) return ENXIO;
+	int error = qwzmac_qwz_scan_poll(me->fQwz, generation);
+	me->clientExit();
+	return error;
+}
+int QwzWifi::dvScanSnapshot(void *dev, uint32_t ticket, qwzmac_scan_bss *out, int max)
+{
+	auto me = static_cast<QwzWifi *>(dev);
+	if (!me->clientEnter()) return 0;
+	int n = qwzmac_qwz_scan_snapshot(me->fQwz, ticket, out, max);
+	me->clientExit();
+	return n;
 }

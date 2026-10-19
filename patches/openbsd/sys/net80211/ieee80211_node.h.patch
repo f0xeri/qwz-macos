@@ -1,0 +1,25 @@
+diff --git a/sys/net80211/ieee80211_node.h b/sys/net80211/ieee80211_node.h
+--- a/sys/net80211/ieee80211_node.h
++++ b/sys/net80211/ieee80211_node.h
+@@ -265,6 +265,10 @@ struct ieee80211_rx_ba {
+  * state.  This is done by overriding the ic_node_* methods in
+  * the ieee80211com structure.
+  */
++#ifdef QWZMAC
++#include <qwzmac/scan_observation.h>
++#endif
++
+ struct ieee80211_node {
+ 	RBT_ENTRY(ieee80211_node)	ni_node;
+ 
+@@ -275,6 +279,10 @@ struct ieee80211_node {
+ 
+ 	/* hardware */
+ 	u_int32_t		ni_rstamp;	/* recv timestamp */
++#ifdef QWZMAC
++	/* QWZMAC: only real beacon/probe RX tags this node for native scans. */
++	struct qwzmac_scan_observation ni_qwzmac_scan_seen;
++#endif
+ 	u_int8_t		ni_rssi;	/* recv ssi */
+ 
+ 	/* header */

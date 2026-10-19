@@ -15,6 +15,7 @@
 #include <sys/task.h>
 #include <sys/timeout.h>
 #include <sys/refcnt.h>
+#include <qwzmac/attach.h>
 
 #define	IF_NAMESIZE	16
 #define	IFNAMSIZ	IF_NAMESIZE
@@ -126,6 +127,11 @@ struct ifnet {
 	void	(*if_qwzmac_input)(struct ifnet *, struct mbuf *);
 	void	(*if_qwzmac_link_state)(struct ifnet *);
 	void	*if_qwzmac_cookie;
+	uint32_t if_qwzmac_scan_generation;
+	int if_qwzmac_scan_error;
+	struct qwzmac_scan_request if_qwzmac_scan_request;
+	uint32_t if_qwzmac_scan_ticket, if_qwzmac_scan_active, if_qwzmac_scan_done;
+	int if_qwzmac_scan_pending, if_qwzmac_scan_done_error;
 };
 
 #define if_ipackets	if_data_counters[ifc_ipackets]

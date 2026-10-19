@@ -21,7 +21,7 @@
 
 #define QLOG(fmt, ...) qwzmac_log("QwzWifi: " fmt "\n", ##__VA_ARGS__)
 
-#define QWZ_VERSION	"0.0.8"
+#define QWZ_VERSION	"0.0.10"
 
 class QwzWifi : public IOEthernetController {
 	OSDeclareDefaultStructors(QwzWifi)
@@ -86,6 +86,9 @@ private:
 	static int dvCountry(void *dev, char cc[3]);
 	static int dvChannels(void *dev, qwzmac_chan *out, int max);
 	static int dvStaInfo(void *dev, qwzmac_sta_info *si);
+	static int dvScanStart(void *, const qwzmac_scan_request *, uint32_t *);
+	static int dvScanPoll(void *, uint32_t);
+	static int dvScanSnapshot(void *, uint32_t, qwzmac_scan_bss *, int);
 
 	IOPCIDevice	*fPci;
 	void		*fQwz;
