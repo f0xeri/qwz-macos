@@ -61,3 +61,6 @@ sys/net80211/ieee80211_rssadapt.h
 sys/net80211/ieee80211_var.h
 sys/netinet/ip.h
 sys/netinet/ip6.h
+sys/sys/queue.h
+sys/sys/sockio.h
+sys/sys/tree.h
