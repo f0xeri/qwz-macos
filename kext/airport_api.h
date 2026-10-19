@@ -27,7 +27,7 @@ extern "C" {
 #endif
 
 /* Bumped on any change of the structures below; both sides must agree. */
-#define QWZ_AIRPORT_API_VERSION	9
+#define QWZ_AIRPORT_API_VERSION	10
 #define QWZ_AIRPORT_CONNECT	"QwzAirportConnect"
 #define QWZ_AIRPORT_DISCONNECT	"QwzAirportDisconnect"
 

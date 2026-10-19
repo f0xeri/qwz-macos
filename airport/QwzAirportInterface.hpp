@@ -17,6 +17,7 @@
 
 #include "QwzAirport.hpp"
 #include "Join.hpp"
+#include "CurrentLink.hpp"
 #include "RadioLifecycle.hpp"
 
 class QwzAirportInterface : public IO80211InfraProtocol {
@@ -50,6 +51,9 @@ public:
 	IOReturn getWCL_CHANNELS_INFO(apple80211ChannelInfo *) override;
 	IOReturn getHW_ADDR(apple80211_hw_mac_address *) override;
 	IOReturn getNSS(apple80211_nss_data *) override;
+	IOReturn getCHANNEL(apple80211_channel_data *) override;
+	IOReturn getRSSI(apple80211_rssi_data *) override;
+	IOReturn getRATE(apple80211_rate_data *) override;
 	IOReturn getWCL_LOW_LATENCY_INFO(apple80211_low_latency_info *) override;
 	IOReturn setWCL_UPDATE_FAST_LANE(apple80211_fastlane *) override;
 	IOReturn setMacAddress(mloAddrArray &) override;
@@ -83,6 +87,8 @@ private:
 	QwzJoin::BeaconTracker fJoinBeacons;
 	uint32_t fLqmUpdates;
 	int fReportedLqm;
+	qwzmac_sta_info fJoinStation;
+	QwzCurrentLink::Channel fJoinChannel;
 	static void scanTc(thread_call_param_t, thread_call_param_t);
 	static IOReturn scanCommand(OSObject *, void *, void *, void *, void *);
 	void finishScan(IOReturn);

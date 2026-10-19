@@ -50,3 +50,8 @@ deltas in LqmUpdate, RSSI quality on change, and ordinary SCAN-based join.
 Every eighth real associated beacon queues a counted seam event; QwzAirport
 then snapshots RX and posts WCL in its gate, outside the net80211 spl lock. No synthetic beacon
 heartbeat or unconditional stop/init is part of the join path.
+
+Current-channel, RSSI and rate getter behavior follows the same pinned
+AirportItlwmSkywalkInterface.cpp in laobamac/itlwm and AirportMtkWlan.
+QwzCurrentLink translates qwz's actual status through the seam instead of
+accessing their HAL/net80211 objects from the native front.

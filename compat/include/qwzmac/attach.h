@@ -173,6 +173,7 @@ struct qwzmac_native_join {
 };
 struct qwzmac_native_status {
 	struct qwzmac_sta_info station;
+	uint32_t channel_flags; /* QWZMAC_CHAN_* of the actual associated channel */
 	struct qwzmac_scan_bss bss;
 	uint32_t authorized, beacon_sequence, beacon_length;
 	uint8_t beacon[2048];
@@ -195,6 +196,8 @@ struct qwzmac_chan {
 #define QWZMAC_CHAN_PASSIVE	0x04	/* no probe requests: listen only */
 #define QWZMAC_CHAN_40MHZ	0x08	/* HT40 allowed */
 #define QWZMAC_CHAN_80MHZ	0x10	/* VHT80 allowed */
+#define QWZMAC_CHAN_DFS	0x20
+#define QWZMAC_CHAN_EXT_ABOVE 0x40 /* HT40 extension channel above primary */
 /* The channels the firmware's regulatory domain allows; returns how many. */
 int	qwzmac_qwz_channels(void *dev, struct qwzmac_chan *out, int max);
 /*

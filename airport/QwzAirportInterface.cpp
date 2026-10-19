@@ -25,6 +25,14 @@ static_assert(sizeof(apple80211_rate_set_data) == 0xbc, "extended BSS rate-set l
 static_assert(sizeof(apple80211_mcs_index_set_data) == 0x10, "extended BSS HT MCS layout");
 static_assert(sizeof(apple80211_vht_mcs_index_set_data) == 6, "extended BSS VHT MCS layout");
 OSDefineMetaClassAndStructors(QwzAirportInterface, IO80211InfraProtocol);
+static_assert(sizeof(QwzCurrentLink::Channel) == sizeof(apple80211_channel_data), "current channel wire size");
+static_assert(offsetof(apple80211_channel_data, channel) == 4, "current channel wire offset");
+static_assert(APPLE80211_VERSION == 1 && APPLE80211_C_FLAG_20MHZ == QwzCurrentLink::Width20 &&
+    APPLE80211_C_FLAG_40MHZ == QwzCurrentLink::Width40 && APPLE80211_C_FLAG_2GHZ == QwzCurrentLink::Band2 &&
+    APPLE80211_C_FLAG_5GHZ == QwzCurrentLink::Band5 && APPLE80211_C_FLAG_ACTIVE == QwzCurrentLink::Active &&
+    APPLE80211_C_FLAG_DFS == QwzCurrentLink::DFS && APPLE80211_C_FLAG_EXT_ABV == QwzCurrentLink::Above &&
+    APPLE80211_C_FLAG_80MHZ == QwzCurrentLink::Width80 && APPLE80211_C_FLAG_160MHZ == QwzCurrentLink::Width160,
+    "current channel flags agree with Apple headers");
 
 /* Enough for 2.4 and 5 GHz; qwz has no 6 GHz channels. */
 #define QWZ_AIRPORT_MAX_CHAN	APPLE80211_MAX_CHANNELS
@@ -50,6 +58,8 @@ QwzAirportInterface::initWithController(QwzAirport *controller)
 	fJoinBeacons.reset();
 	fLqmUpdates = 0;
 	fReportedLqm = -2;
+	fJoinStation = {};
+	fJoinChannel = {};
 	bzero(fJoinExtendedBss, sizeof(fJoinExtendedBss));
 	fJoinOperation = JoinIdle;
 	fJoinSerial = 0;
@@ -504,6 +514,18 @@ IOReturn QwzAirportInterface::getBEACON_INFO(apple80211_beacon_info_t *out)
 {
 	return fCtl->gate()->runAction(joinCommand, this, (void *)6, out);
 }
+IOReturn QwzAirportInterface::getCHANNEL(apple80211_channel_data *out)
+{
+	return fCtl->gate()->runAction(joinCommand, this, (void *)9, out);
+}
+IOReturn QwzAirportInterface::getRSSI(apple80211_rssi_data *out)
+{
+	return fCtl->gate()->runAction(joinCommand, this, (void *)10, out);
+}
+IOReturn QwzAirportInterface::getRATE(apple80211_rate_data *out)
+{
+	return fCtl->gate()->runAction(joinCommand, this, (void *)11, out);
+}
 
 void QwzAirportInterface::finishJoin(IOReturn error)
 {
@@ -521,6 +543,8 @@ void QwzAirportInterface::disconnectJoin()
 {
 	fJoinExtendedValid = false;
 	fJoinBeacons.reset();
+	fJoinStation = {};
+	fJoinChannel = {};
 	if (fJoined) {
 		if (fReportedLqm != -2) setLQM(static_cast<unsigned long long>(-2LL));
 		fReportedLqm = -2;
@@ -538,6 +562,28 @@ IOReturn QwzAirportInterface::joinCommand(OSObject *, void *a0, void *a1,
 {
 	auto self = static_cast<QwzAirportInterface *>(a0);
 	unsigned operation = static_cast<unsigned>(reinterpret_cast<uintptr_t>(a1));
+	if (operation >= 9 && operation <= 11) {
+		if (!a2) return kIOReturnBadArgument;
+		if (self->fJoinStation.state != 4) return kIOReturnNotReady;
+		if (operation == 9) {
+			if (!self->fJoinChannel.number) return kIOReturnNotReady;
+			memcpy(a2, &self->fJoinChannel, sizeof(self->fJoinChannel));
+		} else if (operation == 10) {
+			auto out = static_cast<apple80211_rssi_data *>(a2);
+			bzero(out, sizeof(*out));
+			out->version = APPLE80211_VERSION; out->num_radios = 1;
+			out->rssi_unit = APPLE80211_UNIT_DBM;
+			out->rssi[0] = out->aggregate_rssi = out->rssi_ext[0] =
+			    out->aggregate_rssi_ext = self->fJoinStation.rssi_dbm;
+		} else {
+			if (!self->fJoinStation.rate_bps) return kIOReturnNotReady;
+			auto out = static_cast<apple80211_rate_data *>(a2);
+			bzero(out, sizeof(*out));
+			out->version = APPLE80211_VERSION; out->num_radios = 1;
+			out->rate[0] = static_cast<uint32_t>(self->fJoinStation.rate_bps / 1000000);
+		}
+		return kIOReturnSuccess;
+	}
 	if (operation == 7) {
 		if (!a2 || !self->fJoinExtendedValid) return kIOReturnNotReady;
 		memcpy(a2, self->fJoinExtendedBss, sizeof(self->fJoinExtendedBss));
@@ -599,6 +645,10 @@ IOReturn QwzAirportInterface::joinCommand(OSObject *, void *a0, void *a1,
 		bool samePeer = status.station.state == 4 &&
 		    !memcmp(status.station.bssid, self->fJoinBSSID, 6);
 		if (samePeer) {
+			// Cache before AssocComplete/LinkStatus: airportd synchronously
+			// queries these, just as it does in the reference native fronts.
+			self->fJoinStation = status.station;
+			QwzCurrentLink::channel(status, self->fJoinChannel);
 			self->fJoinExtendedValid = QwzExtendedBss::encode(status,
 			    self->fJoinExtendedBss, sizeof(self->fJoinExtendedBss));
 			self->fCtl->setProperty("QwzAirportExtendedBssReady", self->fJoinExtendedValid);

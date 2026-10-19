@@ -21,3 +21,8 @@ build/test/airport_join_test
 clang++ -std=c++14 -g -fsanitize=address,undefined tests/airport_extended_bss_test.cpp \
     -o build/test/airport_extended_bss_test
 build/test/airport_extended_bss_test
+
+# airportd's post-join CHANNEL request must report actual negotiated metadata.
+clang++ -std=c++14 -g -fsanitize=address,undefined tests/airport_current_link_test.cpp \
+    -o build/test/airport_current_link_test
+build/test/airport_current_link_test

@@ -1473,6 +1473,16 @@ qwzmac_qwz_native_status(void *p, struct qwzmac_native_status *status)
 	    ic->ic_bss->ni_chan != IEEE80211_CHAN_ANYC) {
 		qwzmac_copy_bss(ic, ic->ic_bss, &status->bss);
 		struct ieee80211_node *ni = ic->ic_bss;
+		/* Current-channel metadata for airportd's post-join link event.
+		 * This OpenBSD has no separate CHAN_DFS/HT40U flags: use the same
+		 * dfs_set rule as qwz's WMI channel list, and the negotiated HT op. */
+		if (IEEE80211_IS_CHAN_2GHZ(ni->ni_chan)) status->channel_flags |= QWZMAC_CHAN_2GHZ;
+		if (IEEE80211_IS_CHAN_5GHZ(ni->ni_chan)) status->channel_flags |= QWZMAC_CHAN_5GHZ;
+		if (ni->ni_chan->ic_flags & IEEE80211_CHAN_PASSIVE) status->channel_flags |= QWZMAC_CHAN_PASSIVE;
+		if (IEEE80211_IS_CHAN_5GHZ(ni->ni_chan) &&
+		    (ni->ni_chan->ic_flags & IEEE80211_CHAN_PASSIVE)) status->channel_flags |= QWZMAC_CHAN_DFS;
+		if ((ni->ni_htop0 & IEEE80211_HTOP0_SCO_MASK) == IEEE80211_HTOP0_SCO_SCA)
+			status->channel_flags |= QWZMAC_CHAN_EXT_ABOVE;
 		status->rate_count = MIN(ni->ni_rates.rs_nrates, sizeof(status->rates));
 		memcpy(status->rates, ni->ni_rates.rs_rates, status->rate_count);
 		if (ni->ni_flags & IEEE80211_NODE_HT)
