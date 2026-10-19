@@ -55,3 +55,8 @@ Current-channel, RSSI and rate getter behavior follows the same pinned
 AirportItlwmSkywalkInterface.cpp in laobamac/itlwm and AirportMtkWlan.
 QwzCurrentLink translates qwz's actual status through the seam instead of
 accessing their HAL/net80211 objects from the native front.
+
+Early scan result publication follows both references' IEEE80211_EVT_BEACON
+-> publishWCLBeacon path while scanPending, with separate SCAN_DONE. Our
+cross-kext seam uses bounded 250 ms progress snapshots of actual ticketed RX
+rather than calling WCL from the OpenBSD receive context.

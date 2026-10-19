@@ -1332,8 +1332,8 @@ qwzmac_copy_bss(struct ieee80211com *ic, struct ieee80211_node *ni,
 	b->ie_len = ie - b->ies; /* <= 34+10+3+257 = 304 */
 }
 
-int
-qwzmac_qwz_scan_snapshot(void *p, uint32_t ticket, struct qwzmac_scan_bss *out, int max)
+static int
+qwzmac_scan_copy(void *p, uint32_t ticket, struct qwzmac_scan_bss *out, int max, int progress)
 {
 	struct qwzmac_dev *qd = p;
 	struct ieee80211com *ic;
@@ -1343,9 +1343,10 @@ qwzmac_qwz_scan_snapshot(void *p, uint32_t ticket, struct qwzmac_scan_bss *out, 
 		return 0;
 	qwzmac_spl_lock();
 	ic = &((struct qwz_softc *)qd->dev)->sc_ic;
-	/* Only the successfully completed request may publish observations. */
-	if (ticket == 0 || ic->ic_if.if_qwzmac_scan_done != ticket ||
-	    ic->ic_if.if_qwzmac_scan_done_error != 0) {
+	/* Live results follow the reference fronts' per-RX ScanResult path.
+	 * The final snapshot still requires successful firmware completion. */
+	if (!qwzmac_scan_publishable(ticket, ic->ic_if.if_qwzmac_scan_active,
+	    ic->ic_if.if_qwzmac_scan_done, ic->ic_if.if_qwzmac_scan_done_error, progress)) {
 		qwzmac_spl_unlock();
 		return 0;
 	}
@@ -1364,6 +1365,18 @@ qwzmac_qwz_scan_snapshot(void *p, uint32_t ticket, struct qwzmac_scan_bss *out, 
 	}
 	qwzmac_spl_unlock();
 	return n;
+}
+
+int
+qwzmac_qwz_scan_snapshot(void *p, uint32_t ticket, struct qwzmac_scan_bss *out, int max)
+{
+	return qwzmac_scan_copy(p, ticket, out, max, 0);
+}
+
+int
+qwzmac_qwz_scan_progress(void *p, uint32_t ticket, struct qwzmac_scan_bss *out, int max)
+{
+	return qwzmac_scan_copy(p, ticket, out, max, 1);
 }
 
 /* Airport-only runtime MAC path. The ordinary HeliPort join/power paths are

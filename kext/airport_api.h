@@ -27,7 +27,7 @@ extern "C" {
 #endif
 
 /* Bumped on any change of the structures below; both sides must agree. */
-#define QWZ_AIRPORT_API_VERSION	10
+#define QWZ_AIRPORT_API_VERSION	11
 #define QWZ_AIRPORT_CONNECT	"QwzAirportConnect"
 #define QWZ_AIRPORT_DISCONNECT	"QwzAirportDisconnect"
 
@@ -70,6 +70,8 @@ struct qwz_airport_driver {
 	int (*scan_poll)(void *dev, uint32_t generation);
 	/* Only nodes actually heard during this successfully completed ticket. */
 	int (*scan_snapshot)(void *dev, uint32_t ticket, struct qwzmac_scan_bss *out, int max);
+	/* Publish fresh RX while this hardware ticket is running; not ScanDone. */
+	int (*scan_progress)(void *dev, uint32_t ticket, struct qwzmac_scan_bss *out, int max);
 	/* True only when the Ethernet fallback is withheld for this front. */
 	int (*data_owner)(void *dev);
 	int (*set_mac)(void *dev, const uint8_t mac[6]);

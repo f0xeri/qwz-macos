@@ -165,6 +165,9 @@ struct qwzmac_scan_request {
 int qwzmac_qwz_scan_start(void *dev, const struct qwzmac_scan_request *, uint32_t *ticket);
 int qwzmac_qwz_scan_poll(void *dev, uint32_t generation);
 int qwzmac_qwz_scan_snapshot(void *dev, uint32_t ticket, struct qwzmac_scan_bss *out, int max);
+/* Fresh RX for this running (or successfully completed) ticket, without
+ * claiming scan completion. No observations from queued or failed tickets. */
+int qwzmac_qwz_scan_progress(void *dev, uint32_t ticket, struct qwzmac_scan_bss *out, int max);
 
 /* C4: PMK is already derived by macOS; never treat it as a password. */
 struct qwzmac_native_join {

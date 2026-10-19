@@ -18,6 +18,7 @@
 #include "QwzAirport.hpp"
 #include "Join.hpp"
 #include "CurrentLink.hpp"
+#include "Scan.hpp"
 #include "RadioLifecycle.hpp"
 
 class QwzAirportInterface : public IO80211InfraProtocol {
@@ -98,12 +99,17 @@ private:
 		qwzmac_scan_bss *networks;
 		int count;
 		IOReturn status;
+		bool complete;
 	};
 	IOLock *fScanLock;
 	thread_call_t fScanTc;
 	bool fScanStopping, fScanPending, fScanStarted;
 	uint32_t fScanSerial, fScanGeneration, fScanPolls;
 	uint32_t fScanAccepted, fScanCompleted;
+	QwzScan::ProgressResults fScanProgress;
+	uint32_t fScanPublished;
+	uint64_t fScanStartedAt;
+	bool fScanHadResult;
 	AirportWCL::ScanRequest fScanRequest;
 
 	QwzAirport	*fCtl;

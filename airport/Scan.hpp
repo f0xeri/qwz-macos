@@ -5,6 +5,32 @@
 #include "WCL.hpp"
 #include "../compat/include/qwzmac/attach.h"
 namespace QwzScan {
+// Suppress repeats from polling the same partial snapshot. Hidden->visible
+// SSID or channel changes still get published; the final snapshot refreshes
+// all entries with their latest RSSI/security data as the reference RX path does.
+struct ProgressResults {
+    struct Entry { uint8_t bssid[6], ssid[32], length; uint16_t channel; } entries[128];
+    unsigned count;
+    void reset() { count = 0; }
+    bool publish(const qwzmac_scan_bss &b, bool complete) {
+        if (b.ssid_len > sizeof(b.ssid)) return false;
+        if (complete) return true;
+        for (unsigned i=0; i<count; ++i) {
+            auto &e=entries[i];
+            if (memcmp(e.bssid,b.bssid,6)) continue;
+            if (e.length==b.ssid_len && e.channel==b.channel &&
+                !memcmp(e.ssid,b.ssid,b.ssid_len)) return false;
+            e.length=b.ssid_len; e.channel=b.channel;
+            memcpy(e.ssid,b.ssid,b.ssid_len);
+            return true;
+        }
+        if (count==128) return false; // bounded progress; final refresh is independent
+        auto &e=entries[count++];
+        memcpy(e.bssid,b.bssid,6); memcpy(e.ssid,b.ssid,b.ssid_len);
+        e.length=b.ssid_len; e.channel=b.channel;
+        return true;
+    }
+};
 struct Message {
     AirportWCL::BeaconMetadata metadata;
     uint8_t ies[384];

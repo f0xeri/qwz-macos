@@ -21,4 +21,14 @@ qwzmac_scan_observed(const struct qwzmac_scan_observation *seen, uint32_t ticket
 {
     return ticket != 0 && seen->ticket == ticket;
 }
+/* Progress may expose RX from the running hardware ticket. A queued request,
+ * another cycle, or failed completion never makes old cache entries current. */
+static inline int
+qwzmac_scan_publishable(uint32_t ticket, uint32_t active, uint32_t done,
+    int done_error, int progress)
+{
+    if (!ticket) return 0;
+    if (done == ticket) return done_error == 0;
+    return progress && active == ticket;
+}
 #endif

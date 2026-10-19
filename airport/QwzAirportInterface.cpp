@@ -78,6 +78,10 @@ QwzAirportInterface::initWithController(QwzAirport *controller)
 	fScanStopping = fScanPending = fScanStarted = false;
 	fScanSerial = fScanGeneration = fScanPolls = 0;
 	fScanAccepted = fScanCompleted = 0;
+	fScanProgress.reset();
+	fScanPublished = 0;
+	fScanStartedAt = 0;
+	fScanHadResult = false;
 	if (fScanLock == nullptr)
 		return false;
 	fScanTc = thread_call_allocate_with_options(scanTc, this,
@@ -370,14 +374,30 @@ IOReturn QwzAirportInterface::scanCommand(OSObject *, void *a0, void *a1,
 			    request.channelCount != 0, b.channel)) continue;
 			QwzScan::Message message;
 			size_t length = QwzScan::encode(b, message);
-			if (length) {
+			if (length && self->fScanProgress.publish(b, batch->complete)) {
+				if (!self->fScanHadResult) {
+					uint64_t ns;
+					absolutetime_to_nanoseconds(mach_absolute_time() - self->fScanStartedAt, &ns);
+					self->fScanHadResult = true;
+					self->fCtl->setProperty("QwzAirportScanFirstResultMs", ns / 1000000, 64);
+				}
+				++self->fScanPublished;
 				self->fCtl->postMessage(self, AirportWCL::ScanResult,
 				    &message, length, true);
 				++published;
+				// A newly discovered AP can make WCL abort this scan and join
+				// synchronously. Never deliver its remaining old batch afterwards.
+				IOLockLock(self->fScanLock);
+				valid = !self->fScanStopping && self->fScanPending && self->fScanSerial == batch->serial;
+				IOLockUnlock(self->fScanLock);
+				if (!valid) return kIOReturnAborted;
 			}
 		}
-		self->fCtl->setProperty("QwzAirportScanResults", published, 32);
-		self->finishScan(batch->status);
+		self->fCtl->setProperty("QwzAirportScanPublished", self->fScanPublished, 32);
+		if (batch->complete) {
+			self->fCtl->setProperty("QwzAirportScanResults", published, 32);
+			self->finishScan(batch->status);
+		}
 		return kIOReturnSuccess;
 	}
 	if (a1 == nullptr) {
@@ -407,10 +427,15 @@ IOReturn QwzAirportInterface::scanCommand(OSObject *, void *a0, void *a1,
 	self->fScanPending = true;
 	self->fScanStarted = false;
 	self->fScanPolls = 0;
+	self->fScanProgress.reset();
+	self->fScanPublished = 0;
+	self->fScanStartedAt = mach_absolute_time();
+	self->fScanHadResult = false;
 	uint32_t serial = ++self->fScanSerial;
 	IOLockUnlock(self->fScanLock);
 	self->fCtl->setProperty("QwzAirportScanAccepted", ++self->fScanAccepted, 32);
 	self->fCtl->setProperty("QwzAirportScanIdentifier", request.identifier, 32);
+	self->fCtl->setProperty("QwzAirportScanFirstResultMs", 0ULL, 64);
 	ALOG("scan request %u type %u", request.identifier, request.type);
 	self->scheduleScan(0, serial);
 	return kIOReturnSuccess;
@@ -455,21 +480,20 @@ void QwzAirportInterface::scanTc(thread_call_param_t p0, thread_call_param_t)
 		self->scheduleScan(250, serial);
 		return;
 	}
-	if (error == EINPROGRESS && polls < 80) {
-		self->scheduleScan(250, serial);
-		return;
-	}
-	ScanBatch batch = {serial, nullptr, 0, error == 0 ? kIOReturnSuccess :
-	    error == EINPROGRESS ? kIOReturnTimeout : kIOReturnError};
+	bool progress = error == EINPROGRESS && polls < 80;
+	ScanBatch batch = {serial, nullptr, 0, (error == 0 || progress) ? kIOReturnSuccess :
+	    error == EINPROGRESS ? kIOReturnTimeout : kIOReturnError, !progress};
 	const size_t bytes = 128 * sizeof(qwzmac_scan_bss);
-	if (error == 0) {
+	if (error == 0 || progress) {
 		batch.networks = static_cast<qwzmac_scan_bss *>(IOMalloc(bytes));
-		if (batch.networks == nullptr) batch.status = kIOReturnNoMemory;
-		else batch.count = drv->scan_snapshot(drv->dev, generation, batch.networks, 128);
+		if (batch.networks == nullptr) { batch.status = kIOReturnNoMemory; batch.complete = true; }
+		else batch.count = progress ? drv->scan_progress(drv->dev, generation, batch.networks, 128) :
+		    drv->scan_snapshot(drv->dev, generation, batch.networks, 128);
 	}
-	ALOG("scan worker: errno=%d results=%d", error, batch.count);
+	if (batch.complete) ALOG("scan worker: errno=%d results=%d", error, batch.count);
 	self->fCtl->gate()->runAction(scanCommand, self, nullptr, &batch);
 	if (batch.networks != nullptr) IOFree(batch.networks, bytes);
+	if (!batch.complete) self->scheduleScan(250, serial);
 }
 
 void QwzAirportInterface::stopScans()

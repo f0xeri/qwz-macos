@@ -41,7 +41,7 @@ static inline void qwz_airport_log(const char *format, ...)
 }
 #define ALOG(...) qwz_airport_log(__VA_ARGS__)
 
-#define QWZ_AIRPORT_VERSION	"0.3.5"
+#define QWZ_AIRPORT_VERSION	"0.3.6"
 
 class QwzAirportInterface;
 class QwzAirportEthernet;

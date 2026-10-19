@@ -815,6 +815,7 @@ QwzWifi::frontConnect(const qwz_airport_front *front, qwz_airport_driver *driver
 	driver->scan_start = dvScanStart;
 	driver->scan_poll = dvScanPoll;
 	driver->scan_snapshot = dvScanSnapshot;
+	driver->scan_progress = dvScanProgress;
 	driver->data_owner = dvDataOwner;
 	driver->set_mac = dvSetMac;
 	driver->join = dvJoin;
@@ -1122,6 +1123,15 @@ int QwzWifi::dvScanSnapshot(void *dev, uint32_t ticket, qwzmac_scan_bss *out, in
 	auto me = static_cast<QwzWifi *>(dev);
 	if (!me->clientEnter()) return 0;
 	int n = qwzmac_qwz_scan_snapshot(me->fQwz, ticket, out, max);
+	me->clientExit();
+	return n;
+}
+
+int QwzWifi::dvScanProgress(void *dev, uint32_t ticket, qwzmac_scan_bss *out, int max)
+{
+	auto me = static_cast<QwzWifi *>(dev);
+	if (!me->clientEnter()) return 0;
+	int n = qwzmac_qwz_scan_progress(me->fQwz, ticket, out, max);
 	me->clientExit();
 	return n;
 }

@@ -25,6 +25,33 @@ int main()
     assert(qwzmac_scan_observe(&apA, 12));
     assert(qwzmac_scan_observed(&apA, 12));
     assert(!qwzmac_scan_observed(&apB, 12));
+    // Publication rights are distinct from being queued for the next cycle.
+    assert(!qwzmac_scan_publishable(0,0,0,0,1));
+    assert(!qwzmac_scan_publishable(12,11,10,0,1)); // pending 12 is not active
+    assert(qwzmac_scan_publishable(12,12,11,0,1)); // genuine running observations
+    assert(!qwzmac_scan_publishable(12,12,11,0,0)); // final requires completion
+    assert(qwzmac_scan_publishable(12,0,12,0,1)); // completed between poll and copy
+    assert(qwzmac_scan_publishable(12,0,12,0,0));
+    assert(!qwzmac_scan_publishable(12,0,12,5,1)); // failed scans cannot renew results
+    assert(!qwzmac_scan_publishable(12,12,12,5,1)); // failure wins over inconsistent active ID
+    assert(!qwzmac_scan_publishable(12,13,13,0,1)); // no old ticket reuse
+
+    QwzScan::ProgressResults progress = {};
+    qwzmac_scan_bss seen = {}; seen.bssid[0]=2; seen.channel=100;
+    assert(progress.publish(seen,false));
+    assert(!progress.publish(seen,false)); // polling a cache is not another RX event
+    memcpy(seen.ssid,"test",4); seen.ssid_len=4;
+    assert(progress.publish(seen,false)); // hidden beacon -> named probe response
+    assert(!progress.publish(seen,false));
+    seen.channel=36; assert(progress.publish(seen,false));
+    seen.rssi_dbm=-40;
+    assert(!progress.publish(seen,false)); // interim RSSI refresh is batched at completion
+    assert(progress.publish(seen,true)); // final always supplies latest RSSI/security
+    for (unsigned i=1;i<128;++i) { seen.bssid[5]=uint8_t(i); assert(progress.publish(seen,false)); }
+    seen.bssid[5]=128;
+    assert(!progress.publish(seen,false)); // bounded progress state
+    assert(progress.publish(seen,true)); // capacity cannot suppress final snapshot
+    progress.reset(); assert(progress.publish(seen,false)); // new request can rediscover it
     QwzRadio::State radio = {};
     assert(QwzRadio::transition(radio, QWZMAC_RADIO_UP) ==
         (QwzRadio::EndReset | QwzRadio::Available));
