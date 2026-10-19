@@ -50,6 +50,7 @@ QwzAirport::init(OSDictionary *properties)
 	fPowerSerial = 0;
 	fPowerTc = nullptr;
 	fRadioTc = nullptr;
+	fAsyncLock = nullptr;
 	fLifecycleLock = nullptr;
 	fLifecycle = 0;
 	fRadioState = QWZMAC_RADIO_DOWN;
@@ -59,6 +60,8 @@ QwzAirport::init(OSDictionary *properties)
 	fFaultStream = nullptr;
 	fCoreFaultReporter = nullptr;
 	fFaultReporter = nullptr;
+	fAsyncLock = IOLockAlloc();
+	if (!fAsyncLock) return false;
 	fLifecycleLock = IOLockAlloc();
 	if (fLifecycleLock == nullptr) {
 		ALOG("init: IOLockAlloc failed");
@@ -122,6 +125,7 @@ QwzAirport::trace(const char *stage)
 void
 QwzAirport::stopAsync()
 {
+	if (fAsyncLock) IOLockLock(fAsyncLock);
 	if (fNetIf != nullptr) {
 		fNetIf->stopJoins();
 		fNetIf->stopScans();
@@ -154,6 +158,7 @@ QwzAirport::stopAsync()
 		thread_call_free(fPowerTc);
 		fPowerTc = nullptr;
 	}
+	if (fAsyncLock) IOLockUnlock(fAsyncLock);
 }
 
 bool
@@ -290,6 +295,7 @@ QwzAirport::start(IOService *provider)
 	fFront.cookie = this;
 	fFront.event = frontEvent;
 	fFront.input = frontInput;
+	fFront.park = park;
 	fDrv.version = QWZ_AIRPORT_API_VERSION;
 	fDrv.size = sizeof(fDrv);
 	r = provider->callPlatformFunction(QWZ_AIRPORT_CONNECT, false, &fFront, &fDrv,
@@ -482,11 +488,58 @@ void
 QwzAirport::free()
 {
 	releaseAll();
+	if (fAsyncLock) { IOLockFree(fAsyncLock); fAsyncLock = nullptr; }
 	if (fLifecycleLock != nullptr) {
 		IOLockFree(fLifecycleLock);
 		fLifecycleLock = nullptr;
 	}
 	super::free();
+}
+
+/* Park without detach/terminate and without disconnecting our own callback.
+ * Try-lock is essential: stopAsync may already be waiting for this callback. */
+int QwzAirport::park(void *cookie)
+{
+	auto self = static_cast<QwzAirport *>(cookie);
+	if (!self->fAsyncLock || !IOLockTryLock(self->fAsyncLock)) return EBUSY;
+	IOLockLock(self->fLifecycleLock);
+	bool stopping = (__atomic_load_n(&self->fLifecycle, __ATOMIC_SEQ_CST) & Stopping) != 0;
+	__atomic_fetch_or(&self->fLifecycle, (unsigned)Stopping, __ATOMIC_SEQ_CST);
+	IOLockUnlock(self->fLifecycleLock);
+	if (stopping) { IOLockUnlock(self->fAsyncLock); return EBUSY; }
+	__atomic_store_n(&self->fNativeLinkUp, 0, __ATOMIC_SEQ_CST);
+	thread_call_t calls[] = {self->fPowerTc, self->fRadioTc};
+	for (auto call : calls) {
+		if (!call) continue;
+		while (thread_call_isactive(call)) { thread_call_cancel(call); IOSleep(5); }
+	}
+	if (self->fNetIf) { self->fNetIf->stopJoins(); self->fNetIf->stopScans(); }
+	IOReturn result = self->fGate->runAction(parkGated);
+	IOLockUnlock(self->fAsyncLock);
+	return result == kIOReturnSuccess ? 0 : EIO;
+}
+IOReturn QwzAirport::parkGated(OSObject *owner, void *, void *, void *, void *)
+{
+	auto self = static_cast<QwzAirport *>(owner);
+	self->fPowerState = 0;
+	self->nativeLink(false, 0);
+	self->fNativeData = false;
+	if (self->fNetIf) self->fNetIf->radioChanged(QWZMAC_RADIO_DOWN);
+	// Keep the parked endpoint distinct from the real factory-MAC Ethernet
+	// endpoint. No packet rewrite and no firmware MAC request here.
+	uint8_t parked[6];
+	if (self->fDrv.hw_address(self->fDrv.dev, parked)) return kIOReturnNotReady;
+	parked[0] = (parked[0] | 2) & 0xfe;
+	parked[5] ^= 0x80;
+	if (self->fBsdIf && self->fBsdIf->getIfnet()) {
+		if (ifnet_set_lladdr(self->fBsdIf->getIfnet(), parked, 6)) return kIOReturnError;
+		self->fBsdIf->setProperty(kIOMACAddress, parked, 6);
+	}
+	memcpy(self->fMac, parked, 6);
+	self->setProperty(kIOMACAddress, parked, 6);
+	if (self->fNetIf) self->fNetIf->setProperty(kIOMACAddress, parked, 6);
+	self->setProperty("QwzAirportParked", true);
+	return kIOReturnSuccess;
 }
 
 /* The provider callback only records state; it never waits on our gate. */

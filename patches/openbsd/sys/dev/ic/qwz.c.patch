@@ -13,7 +13,19 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  void qwz_scan_abort(struct qwz_softc *);
  int qwz_auth(struct qwz_softc *);
  int qwz_deauth(struct qwz_softc *);
-@@ -416,6 +420,9 @@ qwz_stop(struct ifnet *ifp)
+@@ -236,6 +240,11 @@ qwz_init(struct ifnet *ifp)
+ 	struct ieee80211com *ic = &sc->sc_ic;
+ 	int s = splnet();
+ 
++#ifdef QWZMAC
++	/* QWZMAC: after an uncertain native vdev-delete timeout, do not issue
++	 * work against a possibly deleted ID. Ordinary HeliPort never sets it. */
++	if (sc->qwzmac_native_mac_fault) { splx(s); return EIO; }
++#endif
+ 	/* Firmware stays running across ifconfig down/up; only re-scan. */
+ 	if (sc->fw_initialized) {
+ 		if (!TAILQ_EMPTY(&sc->peers) || sc->num_started_vdevs > 0) {
+@@ -416,6 +425,9 @@ qwz_stop(struct ifnet *ifp)
  	qwz_del_task(sc, sc->sc_nswq, &sc->newstate_task);
  	qwz_del_task(sc, systq, &sc->setkey_task);
  	qwz_del_task(sc, systq, &sc->ba_task);
@@ -23,7 +35,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  	refcnt_finalize(&sc->task_refs, "qwzstop");
  
  	qwz_setkey_clear(sc);
-@@ -1010,6 +1017,9 @@ qwz_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
+@@ -1010,6 +1022,9 @@ qwz_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
  		qwz_del_task(sc, systq, &sc->ba_task);
  		qwz_del_task(sc, systq, &sc->setkey_task);
  		qwz_setkey_clear(sc);
@@ -33,7 +45,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  #if 0
  		qwz_del_task(sc, systq, &sc->bgscan_done_task);
  #endif
-@@ -1091,7 +1101,11 @@ qwz_newstate_task(void *arg)
+@@ -1091,7 +1106,11 @@ qwz_newstate_task(void *arg)
  
  	case IEEE80211_S_SCAN:
  next_scan:
@@ -45,7 +57,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  		if (err)
  			break;
  		if (ifp->if_flags & IFF_DEBUG)
-@@ -11246,6 +11260,11 @@ qwz_reg_chan_list_event(struct qwz_softc *sc, struct mbuf *m,
+@@ -11246,6 +11265,11 @@ qwz_reg_chan_list_event(struct qwz_softc *sc, struct mbuf *m,
  	}
  
  	qwz_init_channels(sc, reg_info);
@@ -57,7 +69,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  #if 0
  	pdev_idx = reg_info->phy_id;
  
-@@ -11492,6 +11511,19 @@ qwz_wmi_event_scan_completed(struct qwz_softc *sc)
+@@ -11492,6 +11516,19 @@ qwz_wmi_event_scan_completed(struct qwz_softc *sc)
  		break;
  	case ATH12K_SCAN_RUNNING:
  	case ATH12K_SCAN_ABORTING:
@@ -77,7 +89,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  		qwz_mac_scan_finish(sc);
  		break;
  	}
-@@ -11556,6 +11588,18 @@ qwz_wmi_event_scan_start_failed(struct qwz_softc *sc)
+@@ -11556,6 +11593,18 @@ qwz_wmi_event_scan_start_failed(struct qwz_softc *sc)
  		break;
  	case ATH12K_SCAN_STARTING:
  	case ATH12K_SCAN_ABORTING:
@@ -96,7 +108,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  		wakeup(&sc->scan.state);
  		qwz_mac_scan_finish(sc);
  		break;
-@@ -11596,6 +11640,18 @@ qwz_scan_event(struct qwz_softc *sc, struct mbuf *m)
+@@ -11596,6 +11645,18 @@ qwz_scan_event(struct qwz_softc *sc, struct mbuf *m)
  	    scan_ev.scan_req_id, scan_ev.scan_id, scan_ev.vdev_id,
  	    qwz_scan_state_str(sc->scan.state), sc->scan.state);
  
@@ -115,7 +127,45 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  	switch (scan_ev.event_type) {
  	case WMI_SCAN_EVENT_STARTED:
  		qwz_wmi_event_scan_started(sc);
-@@ -20125,8 +20181,29 @@ qwz_hal_srng_setup(struct qwz_softc *sc, enum hal_ring_type type,
+@@ -12215,6 +12276,25 @@ qwz_vdev_install_key_compl_event(struct qwz_softc *sc, struct mbuf *m)
+ 	wakeup(&sc->install_key_done);
+ }
+ 
++#ifdef QWZMAC
++/* QWZMAC: native MAC recreation needs the firmware's delete acknowledgement.
++ * Match the ID before waking; malformed/late events cannot release a new vdev. */
++static void
++qwzmac_vdev_delete_event(struct qwz_softc *sc, struct mbuf *m)
++{
++	const void **tb = qwz_wmi_tlv_parse_alloc(sc, mtod(m, void *), m->m_pkthdr.len);
++	const struct wmi_vdev_delete_resp_event *ev;
++	if (tb == NULL) return;
++	ev = tb[WMI_TAG_VDEV_DELETE_RESP_EVENT];
++	if (ev && sc->qwzmac_vdev_delete_id >= 0 &&
++	    ev->vdev_id == (uint32_t)sc->qwzmac_vdev_delete_id) {
++		sc->qwzmac_vdev_delete_done = 1;
++		wakeup(&sc->qwzmac_vdev_delete_done);
++	}
++	free(tb, M_DEVBUF, WMI_TAG_MAX * sizeof(*tb));
++}
++#endif
++
+ void
+ qwz_wmi_tlv_op_rx(struct qwz_softc *sc, struct mbuf *m)
+ {
+@@ -12338,6 +12418,11 @@ qwz_wmi_tlv_op_rx(struct qwz_softc *sc, struct mbuf *m)
+ 	case WMI_11D_NEW_COUNTRY_EVENTID:
+ 		ath12k_reg_11d_new_cc_event(ab, skb);
+ 		break;
++#endif
++#ifdef QWZMAC
++	case WMI_VDEV_DELETE_RESP_EVENTID:
++		qwzmac_vdev_delete_event(sc, m);
++		break;
+ #endif
+ 	case WMI_DIAG_EVENTID:
+ 		/* Ignore. These events trigger tracepoints in Linux. */
+@@ -20125,8 +20210,29 @@ qwz_hal_srng_setup(struct qwz_softc *sc, enum hal_ring_type type,
  		}
  	}
  
@@ -146,7 +196,108 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  
  	qwz_hal_srng_hw_init(sc, srng);
  
-@@ -22488,6 +22565,18 @@ qwz_mac_scan_finish(struct qwz_softc *sc)
+@@ -21531,6 +21637,10 @@ qwz_mac_register(struct qwz_softc *sc)
+ 	sc->cc_freq_hz = IPQ8074_CC_FREQ_HERTZ;
+ 
+ 	sc->free_vdev_map = (1U << (sc->num_radios * TARGET_NUM_VDEVS)) - 1;
++#ifdef QWZMAC
++	sc->qwzmac_vdev_delete_id = -1;
++	sc->qwzmac_native_mac_fault = 0;
++#endif
+ 
+ 	if (IEEE80211_ADDR_EQ(etheranyaddr, sc->sc_ic.ic_myaddr))
+ 		IEEE80211_ADDR_COPY(sc->sc_ic.ic_myaddr, sc->mac_addr);
+@@ -22335,6 +22445,10 @@ qwz_mac_op_add_interface(struct qwz_pdev *pdev)
+ 	}
+ 
+ 	qwz_dp_vdev_tx_attach(sc, pdev, arvif);
++#ifdef QWZMAC
++	/* QWZMAC: distinguish actual vdev creation from a host-only MAC change. */
++	IEEE80211_ADDR_COPY(sc->qwzmac_vdev_mac, ic->ic_myaddr);
++#endif
+ #if 0
+ 	if (vif->type != NL80211_IFTYPE_MONITOR &&
+ 	    test_bit(ATH12K_FLAG_MONITOR_CONF_ENABLED, &ar->monitor_flags)) {
+@@ -22390,6 +22504,78 @@ qwz_mac_start(struct qwz_softc *sc)
+ 	return 0;
+ }
+ 
++#ifdef QWZMAC
++/* QWZMAC: Airport-only counterpart of MediaTek's uni_add_dev(current MAC).
++ * Called under ioctl_rwl + spl after qwz_stop drains state/key/scan tasks.
++ * ath12k deletes and waits before reusing the ID and TX bank. Preserve all
++ * existing low-address DMA maps/rings; nothing is written to persistent storage. */
++int
++qwzmac_recreate_vdev(struct qwz_softc *sc, const uint8_t mac[6])
++{
++	struct qwz_vif *vif = &sc->sc_vif;
++	struct ieee80211com *ic = &sc->sc_ic;
++	struct wmi_vdev_delete_cmd *cmd;
++	struct mbuf *m;
++	uint64_t deadline, now;
++	int error, bank, id;
++	rw_assert_wrlock(&sc->ioctl_rwl);
++	if (sc->qwzmac_native_mac_fault) return EIO;
++	if (!memcmp(sc->qwzmac_vdev_mac, mac, 6)) {
++		IEEE80211_ADDR_COPY(ic->ic_myaddr, mac);
++		IEEE80211_ADDR_COPY(ic->ic_ac.ac_enaddr, mac);
++		return 0;
++	}
++	if (!sc->fw_initialized || sc->num_radios != 1 ||
++	    sc->num_created_vdevs != 1 || sc->num_started_vdevs != 0 ||
++	    sc->num_peers || !TAILQ_EMPTY(&sc->peers) ||
++	    (ic->ic_if.if_flags & IFF_RUNNING) || sc->scan.state != ATH12K_SCAN_IDLE)
++		return EBUSY;
++	id = vif->vdev_id;
++	if (id < 0 || id >= 32 || !(sc->allocated_vdev_map & (1U << id))) return EINVAL;
++	m = qwz_wmi_alloc_mbuf(sizeof(*cmd));
++	if (!m) return ENOMEM;
++	cmd = (void *)(mtod(m, uint8_t *) + sizeof(struct ath12k_htc_hdr) + sizeof(struct wmi_cmd_hdr));
++	cmd->tlv_header = FIELD_PREP(WMI_TLV_TAG, WMI_TAG_VDEV_DELETE_CMD) |
++	    FIELD_PREP(WMI_TLV_LEN, sizeof(*cmd) - TLV_HDR_SIZE);
++	cmd->vdev_id = id;
++	sc->qwzmac_vdev_delete_id = id;
++	sc->qwzmac_vdev_delete_done = 0;
++	printf("%s: native MAC: delete firmware vdev %d\n", sc->sc_dev.dv_xname, id);
++	error = qwz_wmi_cmd_send(&sc->wmi.wmi[sc->pdevs[0].pdev_id], m, WMI_VDEV_DELETE_CMDID);
++	if (error) { m_freem(m); goto fault; }
++	deadline = getnsecuptime() + SEC_TO_NSEC(3);
++	while (!sc->qwzmac_vdev_delete_done) {
++		now = getnsecuptime();
++		if (now >= deadline) { error = ETIMEDOUT; goto fault; }
++		error = tsleep_nsec(&sc->qwzmac_vdev_delete_done, 0, "qwzmac", deadline - now);
++		if (error && !sc->qwzmac_vdev_delete_done) goto fault;
++	}
++	sc->qwzmac_vdev_delete_id = -1;
++	/* ACK proves this vdev is gone. Do not release/reuse anything before it. */
++	qwz_vif_purge(sc);
++	bank = vif->bank_id;
++	if (bank >= 0 && bank < sc->dp.num_bank_profiles && sc->dp.bank_profiles[bank].num_users)
++		sc->dp.bank_profiles[bank].num_users--;
++	sc->allocated_vdev_map &= ~(1U << id);
++	sc->free_vdev_map |= 1U << id;
++	sc->num_created_vdevs--;
++	IEEE80211_ADDR_COPY(ic->ic_myaddr, mac);
++	IEEE80211_ADDR_COPY(ic->ic_ac.ac_enaddr, mac);
++	error = qwz_mac_op_add_interface(&sc->pdevs[0]);
++	if (error) goto fault;
++	printf("%s: native MAC: firmware vdev %u recreated as %s\n",
++	    sc->sc_dev.dv_xname, sc->sc_vif.vdev_id, ether_sprintf(mac));
++	return 0;
++fault:
++	sc->qwzmac_vdev_delete_id = -1;
++	sc->qwzmac_native_mac_fault = 1;
++	/* Unknown firmware ownership: never recycle the ID/DMA on timeout. */
++	if_down(&ic->ic_if);
++	printf("%s: native MAC reconfiguration failed %d; reboot required\n", sc->sc_dev.dv_xname, error);
++	return error;
++}
++#endif
++
+ void
+ qwz_init_task(void *arg)
+ {
+@@ -22488,6 +22674,18 @@ qwz_mac_scan_finish(struct qwz_softc *sc)
  	lockdep_assert_held(&ar->data_lock);
  #endif
  	ostate = sc->scan.state;
@@ -165,7 +316,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  	switch (ostate) {
  	case ATH12K_SCAN_IDLE:
  		break;
-@@ -24085,7 +24174,11 @@ qwz_start_scan(struct qwz_softc *sc, struct scan_req_params *arg)
+@@ -24085,7 +24283,11 @@ qwz_start_scan(struct qwz_softc *sc, struct scan_req_params *arg)
  #define ATH12K_MAC_SCAN_CMD_EVT_OVERHEAD		200 /* in msecs */
  
  int
@@ -177,7 +328,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  {
  	struct ieee80211com *ic = &sc->sc_ic;
  	struct qwz_vif *arvif = &sc->sc_vif;
-@@ -24094,6 +24187,11 @@ qwz_scan(struct qwz_softc *sc)
+@@ -24094,6 +24296,11 @@ qwz_scan(struct qwz_softc *sc)
  	int ret = 0, num_channels, i;
  	uint32_t scan_timeout;
  	int scan_2ghz = 1, scan_5ghz = 1;
@@ -189,7 +340,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  
  	/*
  	 * TODO Will we need separate scan iterations on devices with
-@@ -24137,6 +24235,16 @@ qwz_scan(struct qwz_softc *sc)
+@@ -24137,6 +24344,16 @@ qwz_scan(struct qwz_softc *sc)
  #endif
  	if (ret)
  		goto exit;
@@ -206,7 +357,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  
  	arg = malloc(sizeof(*arg), M_DEVBUF, M_ZERO | M_NOWAIT);
  	if (!arg) {
-@@ -24148,6 +24256,21 @@ qwz_scan(struct qwz_softc *sc)
+@@ -24148,6 +24365,21 @@ qwz_scan(struct qwz_softc *sc)
  	arg->vdev_id = arvif->vdev_id;
  	arg->scan_id = ATH12K_SCAN_ID;
  
@@ -228,7 +379,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  	if (ic->ic_des_esslen != 0) {
  		arg->num_ssids = 1;
  		arg->ssid[0].length  = ic->ic_des_esslen;
-@@ -24169,11 +24292,22 @@ qwz_scan(struct qwz_softc *sc)
+@@ -24169,11 +24401,22 @@ qwz_scan(struct qwz_softc *sc)
  	for (chan = &ic->ic_channels[1]; chan <= lastc; chan++) {
  		if (chan->ic_flags == 0)
  			continue;
@@ -251,7 +402,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  	if (num_channels) {
  		arg->num_chan = num_channels;
  		arg->chan_list = mallocarray(arg->num_chan,
-@@ -24188,6 +24322,14 @@ qwz_scan(struct qwz_softc *sc)
+@@ -24188,6 +24431,14 @@ qwz_scan(struct qwz_softc *sc)
  		for (chan = &ic->ic_channels[1]; chan <= lastc; chan++) {
  			if (chan->ic_flags == 0)
  				continue;
@@ -266,7 +417,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  			if ((!scan_2ghz && IEEE80211_IS_CHAN_2GHZ(chan)) ||
  			    (!scan_5ghz && IEEE80211_IS_CHAN_5GHZ(chan)))
  				continue;
-@@ -24219,7 +24361,11 @@ qwz_scan(struct qwz_softc *sc)
+@@ -24219,7 +24470,11 @@ qwz_scan(struct qwz_softc *sc)
  #ifdef notyet
  		spin_unlock_bh(&ar->data_lock);
  #endif
@@ -278,7 +429,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  		/*
  		 * The current mode might have been fixed during association.
  		 * Ensure all channels get scanned.
-@@ -24231,6 +24377,14 @@ qwz_scan(struct qwz_softc *sc)
+@@ -24231,6 +24486,14 @@ qwz_scan(struct qwz_softc *sc)
  	timeout_add_msec(&sc->scan.timeout, scan_timeout);
  #endif
  exit:
@@ -293,7 +444,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  	if (arg) {
  		free(arg->chan_list, M_DEVBUF,
  		    arg->num_chan * sizeof(*arg->chan_list));
-@@ -24287,6 +24441,71 @@ qwz_scan_abort(struct qwz_softc *sc)
+@@ -24287,6 +24550,71 @@ qwz_scan_abort(struct qwz_softc *sc)
  #endif
  }
  
@@ -365,7 +516,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  /*
   * Find a pdev which corresponds to a given channel.
   * This doesn't exactly match the semantics of the Linux driver
-@@ -25072,6 +25291,9 @@ qwz_attach(struct qwz_softc *sc)
+@@ -25072,6 +25400,9 @@ qwz_attach(struct qwz_softc *sc)
  	task_set(&sc->newstate_task, qwz_newstate_task, sc);
  	task_set(&sc->setkey_task, qwz_setkey_task, sc);
  	task_set(&sc->ba_task, qwz_ba_task, sc);

@@ -32,3 +32,9 @@ C4 MAC reconfiguration / deferred-join ordering was compared with
 mnnobre/AirportMtkWlan b880d9cd155ba076ae86dc02556f215fd82723d5
 (AirportItlwmV2.cpp and WCL/WCL.cpp), itself based on laobamac/itlwm.
 https://github.com/mnnobre/AirportMtkWlan
+
+Airport-only firmware vdev MAC recreation follows the command/acknowledgement
+ordering in Linux ath12k/mac.c (ath12k_mac_vdev_delete) and ath12k/wmi.c
+(ath12k_wmi_vdev_delete, ath12k_vdev_delete_resp_event), adapted to qwz's
+existing WMI transport and persistent DMA mappings. The ordinary HeliPort
+association path is not replaced.

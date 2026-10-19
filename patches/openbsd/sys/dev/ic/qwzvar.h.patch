@@ -18,7 +18,20 @@ diff --git a/sys/dev/ic/qwzvar.h b/sys/dev/ic/qwzvar.h
  
  	enum ath12k_11d_state	state_11d;
  	int			completed_11d_scan;
-@@ -2180,6 +2190,11 @@ void	qwz_stop(struct ifnet *);
+@@ -2084,6 +2094,12 @@ struct qwz_softc {
+ 	int				peer_mapped;
+ 	int				peer_delete_done;
+ 	int				vdev_setup_done;
++#ifdef QWZMAC
++	/* QWZMAC: native MAC reconfiguration waits for this exact vdev ACK. */
++	int qwzmac_vdev_delete_id, qwzmac_vdev_delete_done;
++	int qwzmac_native_mac_fault;
++	uint8_t qwzmac_vdev_mac[IEEE80211_ADDR_LEN];
++#endif
+ 	int				peer_assoc_done;
+ 
+ 	struct qwz_dbring_cap	*db_caps;
+@@ -2180,6 +2196,11 @@ void	qwz_stop(struct ifnet *);
  void	qwz_watchdog(struct ifnet *);
  void	qwz_init_task(void *);
  int	qwz_newstate(struct ieee80211com *, enum ieee80211_state, int);

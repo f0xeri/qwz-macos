@@ -1356,13 +1356,16 @@ qwzmac_qwz_scan_snapshot(void *p, uint32_t ticket, struct qwzmac_scan_bss *out, 
 	return n;
 }
 
-/* Runtime address only. qwz_init copies ac_enaddr into ic_myaddr and creates
- * the firmware vdev with it. Never modify factory/NVM or rewrite packets. */
+/* Airport-only runtime MAC path. The ordinary HeliPort join/power paths are
+ * unchanged. down/up alone preserves the firmware vdev, so explicitly replace
+ * that vdev before restarting scans (same effect as MediaTek uni_add_dev). */
+extern int qwz_init(struct ifnet *);
+extern int qwzmac_recreate_vdev(struct qwz_softc *, const uint8_t[6]);
 int
 qwzmac_qwz_set_mac(void *p, const uint8_t mac[6])
 {
 	struct qwzmac_dev *qd = p;
-	struct ieee80211com *ic;
+	struct qwz_softc *sc;
 	struct ifnet *ifp;
 	uint8_t any = 0;
 	int i, error, was_up;
@@ -1370,20 +1373,22 @@ qwzmac_qwz_set_mac(void *p, const uint8_t mac[6])
 	for (i = 0; i < 6; ++i) any |= mac[i];
 	if (!any || (mac[0] & 1)) return EINVAL;
 	if (qwzmac_mgmt_busy(qd)) return EBUSY;
-	ic = &((struct qwz_softc *)qd->dev)->sc_ic;
-	ifp = &ic->ic_if;
+	sc = (struct qwz_softc *)qd->dev;
+	ifp = &sc->sc_ic.ic_if;
+	rw_enter_write(&sc->ioctl_rwl);
 	qwzmac_spl_lock();
-	if (!memcmp(ic->ic_myaddr, mac, 6)) { qwzmac_spl_unlock(); return 0; }
+	if (sc->qwzmac_native_mac_fault) { error = EIO; goto out; }
+	if (!memcmp(sc->qwzmac_vdev_mac, mac, 6) &&
+	    !memcmp(sc->sc_ic.ic_myaddr, mac, 6)) { error = 0; goto out; }
 	was_up = !!(ifp->if_flags & IFF_UP);
+	if (ifp->if_flags & IFF_RUNNING) qwz_stop(ifp);
+	error = qwzmac_recreate_vdev(sc, mac);
+	if (!error && was_up) error = qwz_init(ifp);
+	if (error) if_down(ifp);
+out:
 	qwzmac_spl_unlock();
-	printf("QwzWifi: applying runtime MAC (recreating firmware vdev)\n");
-	error = qwzmac_ifflags(ifp, 0);
-	if (error) return error;
-	qwzmac_spl_lock();
-	memcpy(((struct arpcom *)ifp)->ac_enaddr, mac, 6);
-	memcpy(ic->ic_myaddr, mac, 6);
-	qwzmac_spl_unlock();
-	return was_up ? qwzmac_ifflags(ifp, 1) : 0;
+	rw_exit(&sc->ioctl_rwl);
+	return error;
 }
 
 int

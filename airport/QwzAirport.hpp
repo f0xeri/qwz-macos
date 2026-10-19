@@ -111,6 +111,9 @@ public:
 private:
 	void trace(const char *stage);
 	void stopAsync();
+	static int park(void *);
+	static IOReturn parkGated(OSObject *, void *, void *, void *, void *);
+	IOLock *fAsyncLock;
 	void scheduleRadio();
 	static void radioTc(thread_call_param_t, thread_call_param_t);
 	bool initCCLogs();

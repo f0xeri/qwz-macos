@@ -487,14 +487,12 @@ void QwzWifi::publishEthernet()
 	}
 }
 
-/* Explicit one-way handover only. No timer and no automatic fallback. */
+/* Explicit handover, keeping the native interfaces registered. */
 IOReturn QwzWifi::requestHeliportMode()
 {
 	IOLockLock(fIfLock);
-	if (fStopping || fModeTc == nullptr) {
-		IOLockUnlock(fIfLock); return kIOReturnNotReady;
-	}
-	if (!fNativePreferred && fNetIf != nullptr) {
+	if (fStopping || !fModeTc) { IOLockUnlock(fIfLock); return kIOReturnNotReady; }
+	if (fNetIf) {
 		setProperty("QwzModeSwitch", "HeliPort");
 		IOLockUnlock(fIfLock); return kIOReturnSuccess;
 	}
@@ -509,36 +507,40 @@ void QwzWifi::modeTc(thread_call_param_t p0, thread_call_param_t)
 {
 	auto me = static_cast<QwzWifi *>(p0);
 	if (!me->clientEnter()) return;
-	// Terminate the native provider, including its controller and interfaces.
-	// No driver lock is held: stop() drains WCL workers and disconnects RX.
-	auto children = me->getChildIterator(gIOServicePlane);
-	bool ok = true;
-	while (children) {
-		auto child = OSDynamicCast(IOService, children->getNextObject());
-		if (!child) break;
-		if (!child->metaCast("QwzAirportNub")) continue;
-		if (!child->terminate(kIOServiceRequired | kIOServiceSynchronous)) ok = false;
-	}
-	OSSafeReleaseNULL(children);
+	qwz_airport_front front = {};
 	IOLockLock(me->fIfLock);
-	ok = ok && !me->fFrontOn && !me->fStopping;
-	IOLockUnlock(me->fIfLock);
-	if (ok) {
-		(void)qwzmac_qwz_native_leave(me->fQwz);
-		int error = qwzmac_qwz_set_mac(me->fQwz, me->fMac);
-		if (!error) {
-			IOLockLock(me->fIfLock);
-			me->fNativePreferred = false;
-			IOLockUnlock(me->fIfLock);
-			me->publishEthernet();
-		}
-		else { me->setProperty("QwzModeSwitch", "MAC restore failed"); me->clientExit(); return; }
-		IOLockLock(me->fIfLock);
-		bool published = me->fNetIf != nullptr;
+	// A second request can re-enter this ONCE call while the first runs.
+	// Once Ethernet exists, do not leave/reset its newly joined network.
+	if (me->fNetIf != nullptr) {
 		IOLockUnlock(me->fIfLock);
-		me->setProperty("QwzModeSwitch", published ? "HeliPort" : "Ethernet publication failed");
-		if (published) QLOG("manual switch to HeliPort mode completed");
-	} else me->setProperty("QwzModeSwitch", "native teardown failed; Ethernet withheld");
+		me->setProperty("QwzModeSwitch", "HeliPort");
+		me->clientExit(); return;
+	}
+	if (me->fFrontOn) { front = me->fFront; ++me->fFrontCalls; }
+	IOLockUnlock(me->fIfLock);
+	int error = front.cookie ? (front.park ? front.park(front.cookie) : ENOTSUP) : 0;
+	if (front.cookie) {
+		IOLockLock(me->fIfLock);
+		if (--me->fFrontCalls == 0) IOLockWakeup(me->fIfLock, &me->fFrontCalls, false);
+		IOLockUnlock(me->fIfLock);
+		// park cannot disconnect while its own callback is counted above.
+		if (!error) (void)me->frontDisconnect(front.cookie);
+	}
+	if (!error) error = qwzmac_qwz_native_leave(me->fQwz);
+	if (!error) error = qwzmac_qwz_set_mac(me->fQwz, me->fMac);
+	if (!error) {
+		IOLockLock(me->fIfLock);
+		bool ready = !me->fFrontOn && !me->fStopping;
+		if (ready) me->fNativePreferred = false;
+		IOLockUnlock(me->fIfLock);
+		if (ready) me->publishEthernet();
+		IOLockLock(me->fIfLock);
+		ready = ready && me->fNetIf != nullptr;
+		IOLockUnlock(me->fIfLock);
+		if (!ready) error = EBUSY;
+	}
+	me->setProperty("QwzModeSwitch", error ? "handover failed; native interface retained" : "HeliPort");
+	QLOG("manual HeliPort handover result %d (native interface retained)", error);
 	me->clientExit();
 }
 
@@ -1001,11 +1003,8 @@ QwzWifi::stop(IOService *provider)
 	netif = fNetIf;
 	fNetIf = nullptr;
 	IOLockUnlock(fIfLock);
-	if (fModeTc != nullptr) {
-		while (thread_call_isactive(fModeTc)) {
-			thread_call_cancel(fModeTc);
-			IOSleep(5);
-		}
+	if (fModeTc) {
+		while (thread_call_isactive(fModeTc)) { thread_call_cancel(fModeTc); IOSleep(5); }
 		thread_call_free(fModeTc);
 		fModeTc = nullptr;
 	}

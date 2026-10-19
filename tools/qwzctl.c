@@ -202,7 +202,9 @@ main(int argc, char **argv)
 	if (strcmp(argv[1], "mode") == 0 && argc == 3 && strcmp(argv[2], "heliport") == 0) {
 		kern_return_t error = IOConnectCallMethod(con, QWZ_IOCTL_HELIPORT_MODE,
 		    NULL, 0, NULL, 0, NULL, NULL, NULL, NULL);
-		if (error) fprintf(stderr, "mode switch: 0x%x (run with sudo)\n", error);
+		if (error == kIOReturnUnsupported)
+			fprintf(stderr, "This loaded driver does not support safe parked handover; reboot into Ethernet mode.\n");
+		else if (error) fprintf(stderr, "mode switch: 0x%x (administrator access required)\n", error);
 		else {
 			io_service_t service = IO_OBJECT_NULL;
 			error = IOConnectGetService(con, &service);

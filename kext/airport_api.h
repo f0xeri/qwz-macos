@@ -27,7 +27,7 @@ extern "C" {
 #endif
 
 /* Bumped on any change of the structures below; both sides must agree. */
-#define QWZ_AIRPORT_API_VERSION	6
+#define QWZ_AIRPORT_API_VERSION	7
 #define QWZ_AIRPORT_CONNECT	"QwzAirportConnect"
 #define QWZ_AIRPORT_DISCONNECT	"QwzAirportDisconnect"
 
@@ -92,6 +92,9 @@ struct qwz_airport_front {
 	/* RX under the driver's recursive spl lock: copy before returning,
 	 * NEVER acquire the WCL gate here. Disconnect drains this too. */
 	void (*input)(void *cookie, const void *frame, size_t len);
+	/* Quiesce native workers, keep both interfaces registered. Outside all
+	 * gates/spl; must NOT disconnect the seam from inside this callback. */
+	int (*park)(void *cookie);
 };
 
 #ifdef __cplusplus

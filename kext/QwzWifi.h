@@ -21,7 +21,7 @@
 
 #define QLOG(fmt, ...) qwzmac_log("QwzWifi: " fmt "\n", ##__VA_ARGS__)
 
-#define QWZ_VERSION	"0.0.16"
+#define QWZ_VERSION	"0.0.17"
 
 class QwzWifi : public IOEthernetController {
 	OSDeclareDefaultStructors(QwzWifi)
@@ -60,6 +60,7 @@ public:
 	void bsdName(char *buf, size_t len);
 
 	IOReturn requestHeliportMode();
+	static void modeTc(thread_call_param_t, thread_call_param_t);
 	bool nativeDataMode() const {
 		IOLockLock(fIfLock);
 		bool native = (fNativePreferred || fHeliportRequested) && fNetIf == nullptr;
@@ -103,7 +104,6 @@ private:
 	static int dvLeave(void *);
 	static int dvJoinStatus(void *, qwzmac_native_status *);
 	static int dvOutput(void *, const void *, size_t);
-	static void modeTc(thread_call_param_t, thread_call_param_t);
 	void publishEthernet();
 
 	IOPCIDevice	*fPci;
