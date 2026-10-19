@@ -17,6 +17,7 @@
 #include "Scan.hpp"
 #include "Join.hpp"
 #include <kern/clock.h>
+#include <mach/mach_time.h>
 #include <sys/errno.h>
 
 #define super IO80211InfraProtocol
@@ -46,9 +47,13 @@ QwzAirportInterface::initWithController(QwzAirport *controller)
 	fMacError = 0;
 	bzero(fMacAddress, sizeof(fMacAddress));
 	fJoinExtendedValid = false;
+	fJoinBeacons.reset();
+	fLqmUpdates = 0;
+	fReportedLqm = -2;
 	bzero(fJoinExtendedBss, sizeof(fJoinExtendedBss));
 	fJoinOperation = JoinIdle;
-	fJoinSerial = fJoinPolls = 0;
+	fJoinSerial = 0;
+	fJoinDeadline = 0;
 	bzero(&fJoinRequest, sizeof(fJoinRequest));
 	bzero(fJoinBSSID, sizeof(fJoinBSSID));
 	bzero(fJoinBssInfo, sizeof(fJoinBssInfo));
@@ -515,7 +520,10 @@ void QwzAirportInterface::finishJoin(IOReturn error)
 void QwzAirportInterface::disconnectJoin()
 {
 	fJoinExtendedValid = false;
+	fJoinBeacons.reset();
 	if (fJoined) {
+		if (fReportedLqm != -2) setLQM(static_cast<unsigned long long>(-2LL));
+		fReportedLqm = -2;
 		AirportWCL::LinkStatusEvent event = {};
 		memcpy(event.bssid, fJoinBSSID, 6);
 		event.reason = 255;
@@ -634,7 +642,28 @@ IOReturn QwzAirportInterface::joinCommand(OSObject *, void *a0, void *a1,
 			IOLockUnlock(self->fJoinLock);
 			return kIOReturnSuccess;
 		}
-		if (self->fJoinPending && self->fJoinPolls >= 120) {
+		if (self->fJoined) {
+			// Same Tahoe WCL snapshot as AirportMtkWlan's beacon handler.
+			// RX wakes this worker after each eight beacons. The periodic
+			// status poll cannot create updates from a stalled RX counter.
+			uint32_t delta = self->fJoinBeacons.observe(status, self->fJoinBSSID);
+			AirportWCL::LqmBeaconUpdate update;
+			if (AirportWCL::makeBeaconUpdate(delta, update)) {
+				int rssi = status.station.rssi_dbm;
+				int quality = rssi >= -70 ? 100 : (rssi >= -85 ? 50 : 20);
+				if (quality != self->fReportedLqm) {
+					self->setLQM(static_cast<unsigned long long>(quality));
+					self->fReportedLqm = quality;
+				}
+				self->fCtl->setProperty("QwzAirportBeaconSequence", status.beacon_sequence, 32);
+				self->fCtl->setProperty("QwzAirportLqmUpdates", ++self->fLqmUpdates, 32);
+				self->fCtl->postMessage(self, AirportWCL::LqmUpdate, &update, sizeof(update), true);
+				// WCL may synchronously leave from a notification callback.
+				if (!self->fJoined) return kIOReturnSuccess;
+			}
+		}
+		// RX-triggered polls must not shorten the references' 30-second join timeout.
+		if (self->fJoinPending && mach_absolute_time() >= self->fJoinDeadline) {
 			self->finishJoin(kIOReturnTimeout);
 			self->disconnectJoin();
 			IOLockLock(self->fJoinLock);
@@ -679,7 +708,7 @@ IOReturn QwzAirportInterface::joinCommand(OSObject *, void *a0, void *a1,
 	self->fJoinRequest = request;
 	self->fJoinPending = true;
 	self->fJoinOperation = JoinApply;
-	self->fJoinPolls = 0;
+	clock_interval_to_deadline(30, kSecondScale, &self->fJoinDeadline);
 	memcpy(self->fJoinBSSID, request.bssid, 6);
 	uint32_t serial = ++self->fJoinSerial;
 	IOLockUnlock(self->fJoinLock);
@@ -687,6 +716,14 @@ IOReturn QwzAirportInterface::joinCommand(OSObject *, void *a0, void *a1,
 	self->fCtl->setProperty("QwzAirportJoinRequested", serial, 32);
 	self->scheduleJoin(0, serial);
 	return kIOReturnSuccess;
+}
+
+void QwzAirportInterface::beaconReceived()
+{
+	IOLockLock(fJoinLock);
+	if (!fJoinStopping && fJoinOperation == JoinPoll && !fMacPending && !fMacApplying)
+		thread_call_enter(fJoinTc);
+	IOLockUnlock(fJoinLock);
 }
 
 void QwzAirportInterface::scheduleJoin(unsigned milliseconds, uint32_t serial)
@@ -744,7 +781,6 @@ void QwzAirportInterface::joinTc(thread_call_param_t p0, thread_call_param_t)
 	qwzmac_native_join request = self->fJoinRequest;
 	QwzJoin::wipe(&self->fJoinRequest, sizeof(self->fJoinRequest));
 	if (batch.operation == JoinApply) self->fJoinOperation = JoinPoll;
-	++self->fJoinPolls;
 	IOLockUnlock(self->fJoinLock);
 	const auto driver = self->fCtl->driver();
 	if (batch.operation == JoinApply) batch.error = driver->join(driver->dev, &request);

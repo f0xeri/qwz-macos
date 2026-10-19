@@ -27,13 +27,14 @@ extern "C" {
 #endif
 
 /* Bumped on any change of the structures below; both sides must agree. */
-#define QWZ_AIRPORT_API_VERSION	8
+#define QWZ_AIRPORT_API_VERSION	9
 #define QWZ_AIRPORT_CONNECT	"QwzAirportConnect"
 #define QWZ_AIRPORT_DISCONNECT	"QwzAirportDisconnect"
 
 /* Driver -> front events (qwz_airport_front.event). */
 enum {
 	QWZ_AIRPORT_EV_RADIO = 1,	/* data: int, QWZMAC_RADIO_* */
+	QWZ_AIRPORT_EV_BEACON = 2, /* eight real associated beacon RX; read join_status */
 };
 
 /*

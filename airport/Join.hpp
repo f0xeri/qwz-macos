@@ -35,5 +35,20 @@ inline bool connected(const qwzmac_native_status &s, const uint8_t *bssid) {
         s.beacon_length <= sizeof(s.beacon) && (s.beacon[0] & 0xfc) == 0x80 &&
         !memcmp(s.beacon + 16, bssid, 6);
 }
+// Count only newly received associated beacons. Polling an unchanged cached
+// frame must not keep WCL alive when the radio really lost the access point.
+struct BeaconTracker {
+    uint32_t sequence;
+    bool initialized;
+    void reset() { sequence = 0; initialized = false; }
+    uint32_t observe(const qwzmac_native_status &s, const uint8_t *bssid) {
+        if (!connected(s, bssid)) return 0;
+        if (!initialized) { sequence = s.beacon_sequence; initialized = true; return 0; }
+        uint32_t delta = s.beacon_sequence - sequence;
+        if (delta < 8) return 0; // same eight-beacon batching as the reference fronts
+        sequence = s.beacon_sequence;
+        return delta; // unsigned subtraction also handles counter wrap
+    }
+};
 }
 #endif

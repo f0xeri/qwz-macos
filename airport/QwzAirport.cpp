@@ -549,6 +549,12 @@ QwzAirport::frontEvent(void *cookie, int event, const void *data, size_t len)
 	QwzAirport *me = (QwzAirport *)cookie;
 	int state;
 
+	if (event == QWZ_AIRPORT_EV_BEACON) {
+		if ((__atomic_load_n(&me->fLifecycle, __ATOMIC_SEQ_CST) &
+		    (Started | BSDAttached | Stopping)) == (Started | BSDAttached) && me->fNetIf)
+			me->fNetIf->beaconReceived();
+		return;
+	}
 	if (event != QWZ_AIRPORT_EV_RADIO || data == nullptr || len != sizeof(state))
 		return;
 	memcpy(&state, data, sizeof(state));

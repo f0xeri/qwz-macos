@@ -126,6 +126,7 @@ struct ifnet {
 	/* QWZMAC: macOS-side hooks, set by the kext glue. */
 	void	(*if_qwzmac_input)(struct ifnet *, struct mbuf *);
 	void	(*if_qwzmac_link_state)(struct ifnet *);
+	void	(*if_qwzmac_beacon_event)(struct ifnet *);
 	void	*if_qwzmac_cookie;
 	uint32_t if_qwzmac_scan_generation;
 	int if_qwzmac_scan_error;

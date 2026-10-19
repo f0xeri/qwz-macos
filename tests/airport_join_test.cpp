@@ -53,7 +53,41 @@ int main()
     assert(!QwzJoin::connected(status,peer)); // probe isn't FirstBeacon
     status.beacon[0]=0x80; status.beacon_length=2049;
     assert(!QwzJoin::connected(status,peer));
+
+    // Real beacon deltas, not a heartbeat synthesized from poll frequency.
+    QwzJoin::BeaconTracker tracker = {};
+    AirportWCL::LqmBeaconUpdate update;
+    status.beacon_length=36; status.beacon_sequence=100;
+    assert(tracker.observe(status,peer)==0); // baseline excludes a previous join
+    assert(!AirportWCL::makeBeaconUpdate(tracker.observe(status,peer),update));
+    status.beacon_sequence+=8;
+    assert(AirportWCL::makeBeaconUpdate(tracker.observe(status,peer),update));
+    assert(update.receivedDelta==8 && update.scheduledDelta==0);
+    assert(update.beaconValid && update.snapshotValid && update.countersValid);
+    assert(tracker.observe(status,peer)==0); // repeated cached frame cannot hide loss
+    status.beacon_sequence+=7;
+    assert(tracker.observe(status,peer)==0); // fewer than eight: keep accumulating
+    status.beacon_sequence+=1;
+    assert(tracker.observe(status,peer)==8);
+    status.beacon_sequence+=9; status.beacon[16]^=2;
+    assert(tracker.observe(status,peer)==0); // another AP cannot keep this join alive
+    status.beacon[16]^=2; status.beacon[0]=0x50;
+    assert(tracker.observe(status,peer)==0); // a probe response is not a beacon
+    status.beacon[0]=0x80; status.authorized=0;
+    assert(tracker.observe(status,peer)==0);
+    status.authorized=1; status.station.state=1;
+    assert(tracker.observe(status,peer)==0);
+    status.station.state=4;
+    assert(tracker.observe(status,peer)==9);
+    tracker.reset(); status.beacon_sequence=0xfffffffeU;
+    assert(tracker.observe(status,peer)==0);
+    status.beacon_sequence=3;
+    assert(tracker.observe(status,peer)==0); // uint32 wrap, only five new beacons
+    status.beacon_sequence=6;
+    assert(tracker.observe(status,peer)==8);
+    tracker.reset(); status.beacon_sequence=500;
+    assert(tracker.observe(status,peer)==0); // reconnect must establish a new baseline
     memset(target.pmk,0x5a,32); QwzJoin::wipe(&target,sizeof(target));
     for (const auto b:target.pmk) assert(b==0);
-    puts("airport join wire/security/PMK/authorization/beacon tests: OK");
+    puts("airport join wire/security/PMK/authorization/beacon/LQM tests: OK");
 }

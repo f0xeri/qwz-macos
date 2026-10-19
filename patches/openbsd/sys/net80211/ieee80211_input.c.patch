@@ -16,7 +16,7 @@ diff --git a/sys/net80211/ieee80211_input.c b/sys/net80211/ieee80211_input.c
  	if (ic->ic_state == IEEE80211_S_SCAN &&
  	    IEEE80211_IS_CHAN_5GHZ(ni->ni_chan)) {
  		/*
-@@ -2113,6 +2121,18 @@ ieee80211_recv_probe_resp(struct ieee80211com *ic, struct mbuf *m,
+@@ -2113,6 +2121,24 @@ ieee80211_recv_probe_resp(struct ieee80211com *ic, struct mbuf *m,
  	ni->ni_erp = erp;
  	/* NB: must be after ni_chan is setup */
  	ieee80211_setup_rates(ic, ni, rates, xrates, IEEE80211_F_DOSORT);
@@ -30,6 +30,12 @@ diff --git a/sys/net80211/ieee80211_input.c b/sys/net80211/ieee80211_input.c
 +		ic->ic_if.if_qwzmac_beacon_length = m->m_pkthdr.len;
 +		m_copydata(m, 0, m->m_pkthdr.len, ic->ic_if.if_qwzmac_beacon);
 +		ic->ic_if.if_qwzmac_beacon_sequence++;
++		/* QWZMAC: like AirportItlwm/AirportMtkWlan, notify after eight
++		 * real associated beacons. The hook only queues work: WCL is never
++		 * called while net80211's spl lock is held. */
++		if ((ic->ic_if.if_qwzmac_beacon_sequence % 8) == 0 &&
++		    ic->ic_if.if_qwzmac_beacon_event != NULL)
++			ic->ic_if.if_qwzmac_beacon_event(&ic->ic_if);
 +	}
 +#endif
  #ifndef IEEE80211_STA_ONLY

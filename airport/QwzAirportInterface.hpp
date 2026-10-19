@@ -16,7 +16,7 @@
 #define QWZ_AIRPORT_INTERFACE_HPP
 
 #include "QwzAirport.hpp"
-#include "WCL.hpp"
+#include "Join.hpp"
 #include "RadioLifecycle.hpp"
 
 class QwzAirportInterface : public IO80211InfraProtocol {
@@ -28,6 +28,7 @@ public:
 	void stopJoins();
 	bool macBusy();
 	void queueMacAddress(const uint8_t[6]);
+	void beaconReceived();
 	IOReturn setWCL_ASSOCIATE(apple80211AssocCandidates *) override;
 	IOReturn setWCL_JOIN_ABORT(apple80211_wcl_abort_join *) override;
 	IOReturn setWCL_LEAVE_NETWORK(apple80211_leave_network *) override;
@@ -71,13 +72,17 @@ private:
 	uint8_t fMacAddress[6];
 	bool fJoinStopping, fJoinPending, fJoinAssociated, fJoined;
 	int fJoinOperation;
-	uint32_t fJoinSerial, fJoinPolls;
+	uint32_t fJoinSerial;
+	uint64_t fJoinDeadline;
 	uint8_t fJoinBSSID[6];
 	qwzmac_native_join fJoinRequest;
 	uint8_t fJoinBssInfo[sizeof(AirportWCL::BeaconMetadata) + 0x800];
 	uint8_t fJoinBeaconInfo[0x808];
 	bool fJoinBssValid, fJoinExtendedValid;
 	uint8_t fJoinExtendedBss[0x214];
+	QwzJoin::BeaconTracker fJoinBeacons;
+	uint32_t fLqmUpdates;
+	int fReportedLqm;
 	static void scanTc(thread_call_param_t, thread_call_param_t);
 	static IOReturn scanCommand(OSObject *, void *, void *, void *, void *);
 	void finishScan(IOReturn);

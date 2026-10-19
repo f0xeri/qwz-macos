@@ -146,6 +146,13 @@ qwzmac_if_link_state(struct ifnet *ifp)
 
 typedef int (*qwzmac_ioctl_fn)(struct ifnet *, u_long, void *);
 
+static void
+qwzmac_if_beacon(struct ifnet *ifp)
+{
+	struct qwzmac_dev *qd = ifp->if_qwzmac_cookie;
+	if (qd->ops.beacon != NULL) qd->ops.beacon(qd->ops.cookie);
+}
+
 static int
 qwzmac_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 {
@@ -452,6 +459,7 @@ qwzmac_qwz_attach(void *pcidev, const struct qwzmac_netif_ops *ops,
 	ifp->if_qwzmac_cookie = qd;
 	ifp->if_qwzmac_input = qwzmac_if_input;
 	ifp->if_qwzmac_link_state = qwzmac_if_link_state;
+	ifp->if_qwzmac_beacon_event = qwzmac_if_beacon;
 	qwzmac_spl_unlock();
 	/* qwz_pci_attach() schedules the hook only when it fully succeeded. */
 	qd->attached = (mountroot_scheduled != scheduled);
@@ -598,6 +606,7 @@ qwzmac_qwz_disconnect(void *p)
 	qd->ops.input = NULL;
 	qd->ops.link = NULL;
 	qd->ops.radio = NULL;
+	qd->ops.beacon = NULL;
 	qwzmac_spl_unlock();
 }
 
@@ -1407,13 +1416,14 @@ qwzmac_qwz_native_join(void *p, struct qwzmac_native_join *request)
 	sc = (struct qwz_softc *)qd->dev;
 	ic = &sc->sc_ic;
 	ifp = &ic->ic_if;
-	error = qwzmac_qwz_native_leave(p);
-	if (error) goto wipe;
 	printf("QwzWifi: native join accepted by net80211\n");
 	rw_enter_write(&sc->ioctl_rwl);
 	qwzmac_spl_lock();
 	if (!(ifp->if_flags & IFF_RUNNING)) { error = ENETDOWN; goto unlock; }
-	/* Keys, scan parameters and the target change as one net80211 operation. */
+	/* As in AirportItlwm/AirportMtkWlan startWCLJoin: install the target
+	 * atomically, then use the existing scan. Do not first clear the SSID
+	 * and queue a separate scan-only transition via native_leave(). */
+	qd->have_net = 0;
 	ieee80211_disable_rsn(ic);
 	ieee80211_disable_wep(ic);
 	explicit_bzero(ic->ic_psk, sizeof(ic->ic_psk));
@@ -1428,8 +1438,10 @@ qwzmac_qwz_native_join(void *p, struct qwzmac_native_join *request)
 	if (!error) {
 		memcpy(ic->ic_des_bssid, request->bssid, 6);
 		ic->ic_flags |= IEEE80211_F_DESBSSID;
-		/* Same live transition as HeliPort, without firmware reload. */
-		ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
+		/* An in-progress hardware scan selects this BSSID at completion.
+		 * Only request SCAN when not already there, as the reference fronts do. */
+		if (ic->ic_state != IEEE80211_S_SCAN)
+			ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
 	}
 	/* net80211 owns the PMK now; don't retain an extra management copy. */
 	explicit_bzero(qd->psk, sizeof(qd->psk));

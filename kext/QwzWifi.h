@@ -21,7 +21,7 @@
 
 #define QLOG(fmt, ...) qwzmac_log("QwzWifi: " fmt "\n", ##__VA_ARGS__)
 
-#define QWZ_VERSION	"0.0.18"
+#define QWZ_VERSION	"0.0.19"
 
 class QwzWifi : public IOEthernetController {
 	OSDeclareDefaultStructors(QwzWifi)
@@ -87,6 +87,7 @@ private:
 	IOReturn frontDisconnect(void *cookie);
 	void frontQueue(int state);
 	static void netRadio(void *cookie, int state);
+	static void netBeacon(void *cookie);
 	static void frontTc(thread_call_param_t p0, thread_call_param_t p1);
 	static int dvPower(void *dev);
 	static int dvSetPower(void *dev, int on);
@@ -137,6 +138,7 @@ private:
 #define QWZ_RADIO_QLEN	8
 	int		 fRadioQ[QWZ_RADIO_QLEN];
 	unsigned	 fRadioHead, fRadioTail;
+	bool fBeaconPending; /* fRadioLock; coalesce RX signals, never radio states */
 };
 
 #endif /* QWZ_QWZWIFI_H */

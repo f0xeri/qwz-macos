@@ -42,6 +42,8 @@ struct qwzmac_netif_ops {
 	 * qwzmac_qwz_set_power(). Optional; called with the spl lock held.
 	 */
 	void	(*radio)(void *cookie, int state);
+	/* Eight more associated beacons received; signal only, spl lock held. */
+	void	(*beacon)(void *cookie);
 };
 #define QWZMAC_RADIO_DOWN	0
 #define QWZMAC_RADIO_UP		1

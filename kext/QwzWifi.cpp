@@ -232,6 +232,7 @@ QwzWifi::start(IOService *provider)
 	fFrontCalls = 0;
 	fFrontTc = nullptr;
 	fRadioHead = fRadioTail = 0;
+	fBeaconPending = false;
 	fIfLock = IOLockAlloc();
 	if (fIfLock == nullptr)
 		return false;
@@ -313,6 +314,7 @@ QwzWifi::start(IOService *provider)
 	ops.input = netInput;
 	ops.link = netLink;
 	ops.radio = netRadio;
+	ops.beacon = netBeacon;
 
 	QLOG("stage 1: attaching qwz (debug mask 0x%x)", (unsigned)mask);
 	error = qwzmac_qwz_attach(pci, &ops, have_net ? &net : nullptr, &fQwz);
@@ -864,22 +866,41 @@ QwzWifi::netRadio(void *cookie, int state)
 	me->frontQueue(state);
 }
 
-/* Thread call: hand queued radio states to the front, in order. */
+/* RX only queues a signal. Actual front delivery stays outside spl, using
+ * the same counted callback lifetime as radio notifications. */
+void
+QwzWifi::netBeacon(void *cookie)
+{
+	auto me = static_cast<QwzWifi *>(cookie);
+	IOSimpleLockLock(me->fRadioLock);
+	me->fBeaconPending = true;
+	IOSimpleLockUnlock(me->fRadioLock);
+	thread_call_enter(me->fFrontTc);
+}
+
+/* Thread call: hand queued radio states and coalesced beacon RX to the front. */
 void
 QwzWifi::frontTc(thread_call_param_t p0, thread_call_param_t p1)
 {
 	QwzWifi *me = (QwzWifi *)p0;
 	qwz_airport_front front;
-	int state;
+	int state, event;
 
 	(void)p1;
 	for (;;) {
 		IOSimpleLockLock(me->fRadioLock);
-		if (me->fRadioHead == me->fRadioTail) {
+		if (me->fRadioHead == me->fRadioTail && !me->fBeaconPending) {
 			IOSimpleLockUnlock(me->fRadioLock);
 			return;
 		}
-		state = me->fRadioQ[me->fRadioHead++ % QWZ_RADIO_QLEN];
+		if (me->fRadioHead != me->fRadioTail) {
+			state = me->fRadioQ[me->fRadioHead++ % QWZ_RADIO_QLEN];
+			event = QWZ_AIRPORT_EV_RADIO;
+		} else {
+			state = 0;
+			me->fBeaconPending = false;
+			event = QWZ_AIRPORT_EV_BEACON;
+		}
 		IOSimpleLockUnlock(me->fRadioLock);
 
 		IOLockLock(me->fIfLock);
@@ -890,7 +911,7 @@ QwzWifi::frontTc(thread_call_param_t p0, thread_call_param_t p1)
 		front = me->fFront;
 		me->fFrontCalls++;
 		IOLockUnlock(me->fIfLock);
-		front.event(front.cookie, QWZ_AIRPORT_EV_RADIO, &state,
+		front.event(front.cookie, event, &state,
 		    sizeof(state));
 		IOLockLock(me->fIfLock);
 		if (--me->fFrontCalls == 0)
