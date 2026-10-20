@@ -9,7 +9,11 @@ CF=(-x c -std=gnu11 -arch x86_64 -mmacosx-version-min=11.0 -mkernel -ffreestandi
     -Wno-unused-but-set-variable -Wno-sign-conversion -Wno-shorten-64-to-32
     -Wno-implicit-int-conversion -Wno-pointer-sign -ferror-limit=200)
 mkdir -p build/obj
-srcs=("$@"); (( $#srcs )) || srcs=(openbsd/sys/**/*.c compat/*.c(N))
+srcs=("$@"); if (( ! $#srcs )); then
+  manifest=$(python3 scripts/sources.py get sources.openbsd.manifest) || exit 1
+  files=(${(f)"$(grep '\.c$' $manifest)"})
+  srcs=(openbsd/${^files} compat/*.c(N))
+fi
 rc=0
 for f in $srcs; do
   clang "${CF[@]}" -c $f -o build/obj/${f:h:t}_${f:t:r}.o || rc=1

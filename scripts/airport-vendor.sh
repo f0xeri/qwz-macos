@@ -9,8 +9,16 @@
 # The headers are only trusted after scripts/kc-abi.py --check on the running build.
 set -e
 cd "${0:A:h}/.."
-SRC=third_party/laobamac
+SRC=$(python3 scripts/sources.py get sources.laobamac.directory)
 [[ -d $SRC/include/Airport ]] || { echo "$SRC missing: run scripts/fetch-sources.sh"; exit 1; }
+REV=$(python3 scripts/sources.py get sources.laobamac.revision)
+SOURCE_URL=$(python3 scripts/sources.py get sources.laobamac.url)
+[[ $(git -C $SRC rev-parse HEAD) == $REV && -z $(git -C $SRC status --porcelain) ]] || {
+  echo "$SRC differs from pinned $REV; inspect it before importing" >&2; exit 1
+}
+cmp -s airport/WCL.hpp $SRC/AirportItlwm/WCL/WCL.hpp || {
+  echo "WCL.hpp differs from the pinned reference; inspect it before importing" >&2; exit 1
+}
 SDK=$(xcrun --sdk macosx --show-sdk-path)
 KH="$SDK/System/Library/Frameworks/Kernel.framework/Headers"
 TMP=$(mktemp -d); trap 'rm -rf $TMP' EXIT
@@ -27,8 +35,17 @@ done
 cp $SRC/LICENSE airport/abi/LICENSE
 [[ -f airport/abi/qwzairport.patch ]] && patch -s -p1 -d airport/abi < airport/abi/qwzairport.patch
 {
-  echo "laobamac/itlwm $(git -C $SRC rev-parse HEAD) include/Airport (GPL-2.0, LICENSE)"
+  echo "$SOURCE_URL $REV include/Airport (GPL-2.0, LICENSE)"
   echo "copied by scripts/airport-vendor.sh on $(date +%F), then qwzairport.patch applied:"
-  (cd airport/abi && find Airport -type f | sort)
 } > airport/abi/UPSTREAM
+python3 - <<'PY'
+from pathlib import Path
+import hashlib
+base = Path('airport/abi')
+files = sorted(p for p in base.rglob('*') if p.is_file() and p != base / 'SHA256SUMS')
+files.append(Path('airport/WCL.hpp'))
+with (base / 'SHA256SUMS').open('w') as out:
+    for p in files:
+        out.write(hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.as_posix() + '\n')
+PY
 echo "airport/abi: $(find airport/abi/Airport -type f | wc -l | tr -d ' ') headers"

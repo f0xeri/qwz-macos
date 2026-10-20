@@ -11,13 +11,10 @@ cd "${0:A:h}/.."
 SDK=$(xcrun --sdk macosx --show-sdk-path 2>/dev/null) || { echo "No Command Line Tools: run xcode-select --install"; exit 1; }
 KH="$SDK/System/Library/Frameworks/Kernel.framework/Headers"
 [[ -d "$KH" ]] || { echo "Kernel.framework headers not found in $SDK"; exit 1; }
-for f in amss.bin m3.bin board-2.bin; do
-  [[ -f firmware/$f ]] || { echo "firmware/$f missing: run scripts/fetch-sources.sh"; exit 1; }
-done
-# openbsd/ is OpenBSD + patches/openbsd (scripts/patches.sh); warn if it and
-# the patches have drifted apart, so a build never silently uses stale code.
+python3 scripts/check-vendor.py
+# Build only the declared OpenBSD files, with every local edit exported.
 [[ -d openbsd/.git ]] || { echo "openbsd/ missing: run scripts/patches.sh apply"; exit 1; }
-scripts/patches.sh check || echo "WARNING: building openbsd/ as it is, which differs from patches/openbsd"
+scripts/patches.sh check
 RD=$(clang -print-resource-dir)
 OUT=build; mkdir -p $OUT/obj
 ARCH=(-arch x86_64 -mmacosx-version-min=11.0)
@@ -30,7 +27,9 @@ BSDFLAGS=($ARCH -x c -std=gnu11 -mkernel -ffreestanding -fno-builtin -fno-common
           -Wall -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable
           -Wno-sign-conversion -Wno-shorten-64-to-32 -Wno-implicit-int-conversion -Wno-pointer-sign)
 OBJS=()
-for src in openbsd/sys/**/*.c compat/*.c; do
+BSD_MANIFEST=$(python3 scripts/sources.py get sources.openbsd.manifest)
+BSD_SOURCES=(${(f)"$(grep '\.c$' $BSD_MANIFEST)"})
+for src in openbsd/${^BSD_SOURCES} compat/*.c; do
   o=$OUT/obj/bsd_${src:h:t}_${src:t:r}.o; clang "${BSDFLAGS[@]}" -c $src -o $o; OBJS+=$o
 done
 for src in kext/*.cpp; do

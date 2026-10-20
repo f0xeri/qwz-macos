@@ -1,6 +1,6 @@
 #!/bin/zsh
 # OpenBSD sources as upstream + patches. Only patches/openbsd/ is committed:
-#   BASE            the OpenBSD commit we build on
+#   OpenBSD commit comes from config/sources.json.
 #   FILES           which OpenBSD files we use (paths as in openbsd/src)
 #   <path>.patch    our changes to one file, e.g. sys/dev/ic/qwz.c.patch
 # The working copy openbsd/ (gitignored) is the pristine files with the
@@ -15,9 +15,11 @@
 #        scripts/patches.sh update <commit>  move to another OpenBSD commit, keeping our changes
 set -e
 cd "${0:A:h}/.."
-P=patches/openbsd U=third_party/openbsd W=openbsd
-BASE=$(<$P/BASE)
-FILES=(${(f)"$(grep -v '^#' $P/FILES)"})
+P=patches/openbsd W=openbsd
+U=$(python3 scripts/sources.py get sources.openbsd.directory)
+BASE=$(python3 scripts/sources.py get sources.openbsd.revision)
+MANIFEST=$(python3 scripts/sources.py get sources.openbsd.manifest)
+FILES=(${(f)"$(grep -v '^#' $MANIFEST)"})
 SYNCED=$W/.git/qwzmac-synced	# fingerprint of the patches when openbsd/ last matched them
 
 die() { print -u2 "patches.sh: $*"; exit 1 }
@@ -25,7 +27,8 @@ g() { git -C $W "$@" }
 upstream_rev() { g log -1 --format=%s upstream | sed -n 's/^OpenBSD //p' }
 fetch() { # rev -> full hash, fetched into the clone if needed
 	[[ -d $U/.git ]] || die "no $U: run scripts/fetch-sources.sh"
-	git -C $U cat-file -e "$1^{commit}" 2>/dev/null || git -C $U fetch -q origin $1
+	git -C $U cat-file -e "$1^{commit}" 2>/dev/null ||
+	    git -C $U fetch -q "$(python3 scripts/sources.py get sources.openbsd.url)" $1
 	git -C $U rev-parse "$1^{commit}"
 }
 
@@ -101,7 +104,7 @@ apply() {
 
 export_() {
 	[[ -d $W/.git ]] || die "no $W: run scripts/patches.sh apply"
-	[[ $(upstream_rev) == $BASE ]] || die "$W is on OpenBSD $(upstream_rev), $P/BASE says $BASE"
+	[[ $(upstream_rev) == $BASE ]] || die "$W is on OpenBSD $(upstream_rev), config/sources.json says $BASE"
 	local c=(${(f)"$(grep -lr '^<<<<<<< ' $W/sys 2>/dev/null)"})
 	(( $#c )) && die "$W still has conflict markers in: $c"
 	local t=$(mktemp -d) f
@@ -121,9 +124,13 @@ export_() {
 check() {
 	[[ -d $W/.git ]] || { print "$W is missing: run scripts/patches.sh apply"; return 1 }
 	[[ $(upstream_rev) == $BASE ]] ||
-	    { print "$W is on another OpenBSD commit than $P/BASE: run scripts/patches.sh apply"; return 1 }
+	    { print "$W is on another OpenBSD commit than config/sources.json: run scripts/patches.sh apply"; return 1 }
 	[[ ${(pj:\n:)${(o)FILES}} == $(g ls-tree -r --name-only upstream | sort) ]] ||
-	    { print "$P/FILES changed: run scripts/patches.sh apply"; return 1 }
+	    { print "$MANIFEST changed: run scripts/patches.sh apply"; return 1 }
+	# Untracked sources/headers are not part of gen(), but could change a build.
+	[[ ${(pj:\n:)${(o)FILES}} == $(find $W/sys -type f | sed "s|^$W/||" | sort) &&
+	    -z $(find $W/sys -type l -print) ]] ||
+	    { print "$W/sys contains missing, extra or symlinked files; compare with $P/FILES"; return 1 }
 	local w=$(work_fp) p=$(fingerprint $P) s=
 	[[ -f $SYNCED ]] && s=$(<$SYNCED)
 	[[ $w == $p ]] && return 0
@@ -142,6 +149,8 @@ update() {
 	[[ -d $W/.git ]] || die "no $W: run scripts/patches.sh apply"
 	check >/dev/null || die "$W is not in sync with $P: run scripts/patches.sh check"
 	local rev=$(fetch $1) old=$(g rev-parse upstream) t=$(mktemp -d) f n conflicts=()
+	[[ -z $(git -C $U status --porcelain) ]] || die "$U has local edits; inspect before updating"
+	git -C $U checkout -q --detach $rev
 	for f in $FILES; do
 		mkdir -p $t/old/${f:h}
 		g show upstream:$f > $t/old/$f
@@ -160,7 +169,7 @@ update() {
 		(( n )) && conflicts+=$f
 	done
 	rm -rf $t
-	print $rev > $P/BASE
+	python3 scripts/sources.py set-revision openbsd $rev
 	BASE=$rev
 	print "OpenBSD ${old[1,11]} -> ${rev[1,11]}. What changed upstream: git -C $W diff upstream^ upstream"
 	if (( $#conflicts )); then

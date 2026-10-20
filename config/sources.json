@@ -1,0 +1,38 @@
+{
+  "sources": {
+    "openbsd": {
+      "kind": "git",
+      "usage": "build",
+      "url": "https://github.com/openbsd/src.git",
+      "revision": "9d744686b24f92bf6b45ab8178191c31ccb26da5",
+      "directory": "third_party/openbsd",
+      "manifest": "patches/openbsd/FILES"
+    },
+    "laobamac": {
+      "kind": "git",
+      "usage": "import",
+      "url": "https://github.com/laobamac/itlwm.git",
+      "revision": "738d4c61b5a64433b27c1ab09dba94916ab77d8d",
+      "directory": "third_party/laobamac",
+      "paths": [
+        "/include/Airport/",
+        "/AirportItlwm/WCL/",
+        "/LICENSE"
+      ]
+    },
+    "firmware": {
+      "kind": "files",
+      "usage": "build",
+      "url": "https://gitlab.com/kernel-firmware/linux-firmware/-/raw",
+      "revision": "20260309",
+      "directory": "firmware",
+      "path": "ath12k/WCN7850/hw2.0",
+      "files": {
+        "amss.bin": "5660a1aa3db12716b42c687b0c88ef4f6ac80bd46e42cfe3636ed332d3f6e6ee",
+        "m3.bin": "ff40c57556c2fac552ac192c6e2ad59689fd8f50c9f9bcc997d13623c2bcee86",
+        "board-2.bin": "1abee7132dbccb523cca44a8de4e8968aa7bf5a5fcc032c338f687f94ea5bf4e",
+        "Notice.txt": "515bf4c9d620a87458e4447fe01a0e9bc384d1c3e0037cc4c3d2037b1ff25525"
+      }
+    }
+  }
+}
