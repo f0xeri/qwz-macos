@@ -11,7 +11,7 @@ CF=(-std=gnu11 -O1 -g -fsanitize=address -ffunction-sections -fdata-sections -ff
     -Dmalloc=qwzmac_test_malloc -Dfree=qwzmac_test_free
     -Wall -Wno-unused-function -Wno-sign-conversion)
 OBJS=()
-for src in compat/systm.c compat/sync.c compat/task.c compat/uipc_mbuf.c \
+for src in compat/systm.c compat/sync.c compat/task.c compat/mbuf_alloc.c openbsd/sys/kern/uipc_mbuf.c \
     compat/bus_dma.c openbsd/sys/kern/subr_tree.c compat/qwzmac_debug.c compat/if.c compat/if_ether.c \
     compat/pbkdf2.c openbsd/sys/crypto/{hmac,sha1,sha2,md5}.c openbsd/sys/net80211/ieee80211_crypto.c tests/wpa_test.c \
     openbsd/sys/net80211/ieee80211_node.c tests/node_test.c \

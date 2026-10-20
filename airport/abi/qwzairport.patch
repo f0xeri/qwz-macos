@@ -1,6 +1,8 @@
+diff --git a/Airport/macOS26/IO80211ControllerV2.h b/Airport/macOS26/IO80211ControllerV2.h
+index 985a095..f7a2e88 100644
 --- a/Airport/macOS26/IO80211ControllerV2.h
 +++ b/Airport/macOS26/IO80211ControllerV2.h
-@@ -143,8 +143,16 @@
+@@ -143,8 +143,16 @@ class IO80211Controller : public IOEthernetController {
      OSDeclareAbstractStructors(IO80211Controller)
  public:
      IOReturn postMessage(IO80211SkywalkInterface *, unsigned int, void *, unsigned long, bool);

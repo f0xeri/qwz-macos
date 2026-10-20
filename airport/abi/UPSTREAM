@@ -1,2 +1,2 @@
-https://github.com/laobamac/itlwm.git 738d4c61b5a64433b27c1ab09dba94916ab77d8d include/Airport (GPL-2.0, LICENSE)
-copied by scripts/airport-vendor.sh on 2026-10-20, then qwzairport.patch applied:
+https://github.com/laobamac/itlwm.git 738d4c61b5a64433b27c1ab09dba94916ab77d8d include/Airport + AirportItlwm/WCL/WCL.hpp (GPL-2.0, LICENSE)
+copied by scripts/airport-vendor.sh, then qwzairport.patch applied

@@ -24,6 +24,7 @@ sys/dev/ic/qwzvar.h
 sys/dev/pci/if_qwz_pci.c
 sys/dev/pci/pcireg.h
 sys/kern/subr_tree.c
+sys/kern/uipc_mbuf.c
 sys/net/if_dl.h
 sys/net/if_llc.h
 sys/net/if_media.c
