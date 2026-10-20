@@ -26,6 +26,7 @@ static int failures, checks;
 
 int	test_wpa(int *, int *);
 void	test_node_timers(int *, int *);
+void	test_qwz_htc(int *, int *);
 
 #define CHECK(c) do {							\
 	checks++;							\
@@ -557,6 +558,7 @@ main(void)
 	test_misc();
 	test_mbuf();
 	test_bus_dma();
+	test_qwz_htc(&checks, &failures);
 	test_task();
 	test_timeout();
 	test_node_timers(&checks, &failures);

@@ -601,7 +601,8 @@ qwzmac_wake_thread(void *arg)
 	}
 	qwz_activate(qd->dev, DVACT_RESUME);
 	qwz_activate(qd->dev, DVACT_WAKEUP);	/* qwz_init(): firmware up */
-	printf("QwzWifi: wake: chip up again\n");
+	printf("QwzWifi: wake: hardware %s\n",
+	    qwzmac_qwz_power(qd) ? "running" : "initialization failed (radio off)");
 	qwzmac_radio_now(qd);
 }
 

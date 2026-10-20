@@ -615,6 +615,21 @@ QwzAirport::radioGated(OSObject *owner, void *a0, void *, void *, void *)
 	return kIOReturnSuccess;
 }
 
+/* Snapshot actual user intent, not fPowerState (which also tracks hardware).
+ * Never hold this lock while calling back into WCL/setPOWER. */
+QwzPower::Request
+QwzAirport::powerRequest()
+{
+	IOLockLock(fLifecycleLock);
+	QwzPower::Request request = {0, 0};
+	if (!(__atomic_load_n(&fLifecycle, __ATOMIC_SEQ_CST) & Stopping)) {
+		request.wanted = __atomic_load_n(&fPowerWanted, __ATOMIC_SEQ_CST);
+		request.serial = fPowerSerial;
+	}
+	IOLockUnlock(fLifecycleLock);
+	return request;
+}
+
 /* Radio on/off takes seconds: done here, outside the gate. */
 void
 QwzAirport::powerTc(thread_call_param_t p0, thread_call_param_t)

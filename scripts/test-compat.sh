@@ -10,12 +10,13 @@ CF=(-std=gnu11 -O1 -g -fsanitize=address -ffunction-sections -fdata-sections -ff
     -D_KERNEL -DQWZMAC -I compat/include -I openbsd/sys
     -Dmalloc=qwzmac_test_malloc -Dfree=qwzmac_test_free
     -Wall -Wno-unused-function -Wno-sign-conversion)
+python3 tests/extract_qwz_htc.py "${QWZ_HTC_SOURCE:-openbsd/sys/dev/ic/qwz.c}" > $OUT/qwz_htc_impl.c
 OBJS=()
 for src in compat/systm.c compat/sync.c compat/task.c compat/uipc_mbuf.c \
     compat/bus_dma.c openbsd/sys/kern/subr_tree.c compat/qwzmac_debug.c compat/if.c compat/if_ether.c \
     compat/pbkdf2.c openbsd/sys/crypto/{hmac,sha1,sha2,md5}.c openbsd/sys/net80211/ieee80211_crypto.c tests/wpa_test.c \
     openbsd/sys/net80211/ieee80211_node.c tests/node_test.c \
-    tests/wpa_stubs.c tests/compat_test.c; do
+    tests/wpa_stubs.c tests/qwz_htc_test.c tests/compat_test.c; do
   o=$OUT/${src:t:r}.o; clang "${CF[@]}" -c $src -o $o; OBJS+=$o
 done
 clang -std=gnu11 -O1 -g -fsanitize=address -Wall -c tests/os_user.c -o $OUT/os_user.o

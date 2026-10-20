@@ -20,6 +20,7 @@
 #include "CurrentLink.hpp"
 #include "Scan.hpp"
 #include "RadioLifecycle.hpp"
+#include "PowerRecovery.hpp"
 
 class QwzAirportInterface : public IO80211InfraProtocol {
 	OSDeclareDefaultStructors(QwzAirportInterface)
@@ -39,6 +40,7 @@ public:
 	IOReturn getBEACON_INFO(apple80211_beacon_info_t *) override;
 	IOReturn setWCL_SCAN_REQ(apple80211ScanRequest *) override;
 	IOReturn setWCL_SCAN_ABORT(void *) override;
+	IOReturn setWCL_SET_SCAN_HOME_AWAY_TIME(scanHomeAndAwayTime *) override;
 
 	/* Driver (QwzWifi) radio state, QWZMAC_RADIO_*; in the gate. */
 	void radioChanged(int state);
@@ -107,6 +109,8 @@ private:
 	bool fScanStopping, fScanPending, fScanStarted;
 	uint32_t fScanSerial, fScanGeneration, fScanPolls;
 	uint32_t fScanAccepted, fScanCompleted;
+	uint32_t fPowerReplays;
+	QwzPower::Recovery fPowerRecovery;
 	QwzScan::ProgressResults fScanProgress;
 	uint32_t fScanPublished;
 	uint64_t fScanStartedAt;

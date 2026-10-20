@@ -17,3 +17,12 @@ protocol stubs are not timer implementations; invoking one fails the test.
 
 These tests execute production lifecycle logic under a host system-API model.
 They do not execute XNU or replace hardware boot/connection testing.
+
+`qwz_htc_test.c` uses complete, unmodified function bodies selected from the
+working `qwz.c` by `extract_qwz_htc.py` (including its upstream license).
+The real HTC send, HTT request, CE completion and post-reset cleanup run with
+compat DMA/mbufs. Only hardware submission/completion and packet-header setup
+are substituted. Cases cover ownership, repeated reset/reuse, live-device
+retention, submission failure, credit rollback and map-load errors without
+freeing caller-owned packets. To compare an older source without editing the
+working copy: `QWZ_HTC_SOURCE=/absolute/old-qwz.c scripts/test-compat.sh`.

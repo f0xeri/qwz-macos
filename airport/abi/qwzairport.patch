@@ -19,3 +19,17 @@ index 985a095..f7a2e88 100644
      virtual void free();
      virtual bool init(OSDictionary*);
      virtual IOReturn configureReport(IOReportChannelList*, unsigned int, void*, void*);
+diff --git a/Airport/macOS26/IO80211SkywalkInterface.h b/Airport/macOS26/IO80211SkywalkInterface.h
+index 6e6949d..7e7ce3e 100644
+--- a/Airport/macOS26/IO80211SkywalkInterface.h
++++ b/Airport/macOS26/IO80211SkywalkInterface.h
+@@ -202,6 +202,9 @@ public:
+     OSString *setInterfaceRole(unsigned int);
+     void *setInterfaceId(unsigned int);
+     int getInterfaceRole();
++    // QWZMAC: nonvirtual 25G241 IOUC->WCL router, checked against KC.
++    // setPOWER uses request 0x802869c8, command 19 and 24-byte power data.
++    SInt32 routeIoctlToWcl(unsigned int, unsigned int, void *, unsigned long);
+ };
+ static_assert(sizeof(IO80211SkywalkInterface) == 0x128, "WCL ABI size");
+ #endif

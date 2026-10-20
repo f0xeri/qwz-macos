@@ -14,6 +14,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include "QwzAirportInterface.hpp"
+#include "PowerRecovery.hpp"
 #include "Scan.hpp"
 #include "Join.hpp"
 #include <kern/clock.h>
@@ -73,6 +74,8 @@ QwzAirportInterface::initWithController(QwzAirport *controller)
 	    THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
 	if (fJoinTc == nullptr) return false;
 	fRadioLifecycle = {};
+	fPowerReplays = 0;
+	fPowerRecovery.cancel();
 	fScanLock = IOLockAlloc();
 	fScanTc = nullptr;
 	fScanStopping = fScanPending = fScanStarted = false;
@@ -149,6 +152,7 @@ void
 QwzAirportInterface::radioChanged(int state)
 {
 	if (state == QWZMAC_RADIO_GOING_DOWN || state == QWZMAC_RADIO_DOWN) {
+		fPowerRecovery.cancel();
 		finishScan(kIOReturnAborted);
 		finishJoin(kIOReturnOffline);
 		disconnectJoin();
@@ -165,6 +169,7 @@ QwzAirportInterface::radioChanged(int state)
 	}
 	// GOING_DOWN and DOWN may arrive separately or be coalesced. Pair
 	// exactly one reset begin with the ready completion in either case.
+	bool afterReset = fRadioLifecycle.resetPending;
 	unsigned actions = QwzRadio::transition(fRadioLifecycle, state);
 	if (actions & QwzRadio::BeginReset) {
 		uint32_t reset = 0;
@@ -175,7 +180,41 @@ QwzAirportInterface::radioChanged(int state)
 		fCtl->postMessage(this, AirportWCL::ResetInterface, &reset, sizeof(reset), true);
 	}
 	if (actions & QwzRadio::Unavailable) postDriverAvailable(false);
-	if (actions & QwzRadio::Available) postDriverAvailable(true);
+	if (actions & QwzRadio::Available) {
+		if (afterReset) fPowerRecovery.arm();
+		postDriverAvailable(true);
+	}
+	if (state == QWZMAC_RADIO_UP && fPowerRecovery.take()) {
+		// 25G241 SSM coalesces sleep+awake while unavailable. Replay of an
+		// unchanged final state does not resume a scanner halted by reset.
+		// Reapply only a real prior ON request through the ordinary WCL
+		// router, after ready. Never fabricate system awake or an OFF/ON.
+		static_assert(sizeof(QwzPower::Data) == sizeof(apple80211_power_data),
+		    "POWER wire ABI");
+		static_assert(offsetof(QwzPower::Data, state) ==
+		    offsetof(apple80211_power_data, power_state), "POWER state offset");
+		QwzPower::recover(true, fCtl->radioOn(),
+		    [this]() { return fCtl->powerRequest(); },
+		    [this](unsigned request, unsigned command, QwzPower::Data *data, size_t size) {
+			// radioTc enters the shared gate from a thread_call. Apple's
+			// synchronous IOUC router requires inGate() && !onThread().
+			// Never move this to a work-queue/timer callback.
+			int result = routeIoctlToWcl(request, command, data, size);
+			fCtl->setProperty("QwzAirportPowerReplayRouteStatus",
+			    static_cast<uint32_t>(result), 32);
+			return result;
+		    },
+		    [this](QwzPower::Data *data) {
+			return static_cast<int>(fCtl->setPOWER(this,
+			    reinterpret_cast<apple80211_power_data *>(data)));
+		    },
+		    [this]() { postMessage(APPLE80211_M_POWER_CHANGED, nullptr, 0, true); },
+		    [this](QwzPower::Request intent, int result) {
+			fCtl->setProperty("QwzAirportPowerReplayCount", ++fPowerReplays, 32);
+			fCtl->setProperty("QwzAirportPowerReplayStatus", static_cast<uint32_t>(result), 32);
+			ALOG("restore power intent %u after firmware ready: 0x%x", intent.serial, result);
+		    });
+	}
 	fCtl->setProperty("QwzAirportResetPending", fRadioLifecycle.resetPending ?
 	    kOSBooleanTrue : kOSBooleanFalse);
 }
@@ -361,6 +400,23 @@ IOReturn QwzAirportInterface::setWCL_SCAN_REQ(apple80211ScanRequest *request)
 IOReturn QwzAirportInterface::setWCL_SCAN_ABORT(void *)
 {
 	return fCtl->gate()->runAction(scanCommand, this, nullptr);
+}
+
+/* Tahoe 25G241 replays this 8-byte advisory after firmware restart. Refusing
+ * it makes fwLoadCompleteNotificationHandler fail; accepting it alone does
+ * not resume the scanner after reset. Like the pinned native references,
+ * remember the hint; qwz retains its own dwell/rest and passive/DFS policy.
+ * No firmware commands or slow work under WCL's gate. */
+IOReturn
+QwzAirportInterface::setWCL_SET_SCAN_HOME_AWAY_TIME(scanHomeAndAwayTime *data)
+{
+	if (data == nullptr) return kIOReturnBadArgument;
+	fCtl->setProperty("QwzAirportScanHomeAwayHint", data, 8);
+	// This callback is issued while WCL processes FW_LOADED, after SSM
+	// leaves DEFER. Queue our owned thread_call; never call synchronous WCL
+	// IOUC from this callback, which runs on WCL's work queue.
+	if (fPowerRecovery.acknowledge()) fCtl->wclFirmwareReady();
+	return kIOReturnSuccess;
 }
 
 void QwzAirportInterface::finishScan(IOReturn status)

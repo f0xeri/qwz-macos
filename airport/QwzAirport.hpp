@@ -14,6 +14,7 @@
  */
 #ifndef QWZ_AIRPORT_HPP
 #define QWZ_AIRPORT_HPP
+#include "PowerWorker.hpp"
 
 #include <Airport/Apple80211.h>
 #include <Airport/macOS26/FaultReporter.h>
@@ -101,6 +102,8 @@ public:
 	const qwz_airport_driver *driver() const { return &fDrv; }
 	IOCommandGate *gate() const { return fGate; }
 	bool radioOn() const { return fPowerState != 0; }
+	QwzPower::Request powerRequest();
+	void wclFirmwareReady() { scheduleRadio(); }
 	void bsdAttached();
 	bool nativeDataMode() const { return fNativeData; }
 	void nativeLink(bool up, uint64_t rate);
