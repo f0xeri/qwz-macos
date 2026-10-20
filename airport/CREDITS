@@ -23,7 +23,7 @@ Taken, and from which file of laobamac/itlwm 738d4c6:
 - QwzAirportEthernet.cpp/.hpp: from AirportItlwm/AirportItlwmEthernetInterface.cpp/.hpp,
   largely unchanged.
 
-Ours: kext/airport_api.h and its implementation in kext/QwzWifi.cpp, compat/autoconf.c's
+Ours: kext/airport_api.h and its implementation in kext/QwzWifi.cpp, adapter/'s
 qwzmac_qwz_channels()/qwzmac_qwz_country()/radio callback, QWZMAC patches in qwz,
 scripts/airport-stubs.py (QwzAirportStubs.inc), scripts/kc-abi.py, scripts/kc-classsize.py,
 scripts/kclib.py, scripts/airport-vendor.sh.

@@ -1,12 +1,12 @@
 /*
  * QwzWifi — Qualcomm WCN7850 (17cb:1107) driver for macOS, port of OpenBSD qwz(4).
  *
- * Stage 1: run qwz's attach unchanged (compat/autoconf.c) up to "firmware
+ * Stage 1: run qwz's attach unchanged (adapter/device.c) up to "firmware
  * ready" and the MAC address.
  * Stage 2: bring the interface up; net80211 logs the networks it finds.
  * Stage 3: join the configured network (WPA2-PSK) and appear to macOS as
  * an Ethernet interface (itlwm style): Ethernet frames are copied between
- * macOS mbufs and OpenBSD mbufs in compat/autoconf.c.
+ * macOS mbufs and OpenBSD mbufs in adapter/device.c.
  * Stage 4: sleep/wake, packet counters, the link speed follows the TX rate.
  * HeliPort (itlwm's menu app) can pick the network: kext/QwzUserClient.cpp.
  * Native Wi-Fi: the separate QwzAirport.kext (airport/) connects through
@@ -47,7 +47,7 @@
 #include "../compat/include/qwzmac/attach.h"
 #include "QwzWifi.h"
 
-/* 802.11 MTU (2304) plus the Ethernet header, as in compat/autoconf.c. */
+/* 802.11 MTU (2304) plus the Ethernet header, as in adapter/device.c. */
 #define QWZ_FRAME_MAX	(2304 + 14)
 
 /* How often the link speed shown by macOS follows the firmware's TX rate. */
@@ -331,7 +331,7 @@ QwzWifi::start(IOService *provider)
 
 	/*
 	 * At shutdown/restart power the chip down, as Linux ath12k does
-	 * (compat/autoconf.c, qwzmac_qwz_shutdown()); before sleep power it
+	 * (adapter/device.c, qwzmac_qwz_shutdown()); before sleep power it
 	 * down too and bring it up after wake. A priority sleep/wake
 	 * interest gets these messages before the drivers' own power
 	 * changes, without joining the power plane.

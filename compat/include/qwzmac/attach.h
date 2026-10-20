@@ -1,6 +1,6 @@
 /*
  * QwzWifi: entry points the kext uses to run qwz the way OpenBSD's
- * autoconf(9) and ifconfig(8) would (compat/autoconf.c).
+ * autoconf(9) and ifconfig(8) would (adapter/).
  * Only plain C types cross this line.
  * SPDX-License-Identifier: GPL-2.0-only
  */
@@ -67,7 +67,7 @@ int	qwzmac_qwz_output(void *dev, const void *frame, size_t len);
 
 /*
  * The rate the firmware currently sends at, in bit/s (estimated for HT,
- * see compat/autoconf.c), or 0 when not associated.
+ * see adapter/status.c), or 0 when not associated.
  */
 uint64_t qwzmac_qwz_tx_rate(void *dev);
 

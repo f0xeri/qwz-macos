@@ -3,7 +3,7 @@
 # Proven pattern: same flags built XHCIProbe.kext on this machine.
 #
 # Two worlds are compiled separately:
-#  - OpenBSD side (openbsd/sys/**/*.c, compat/*.c): C, freestanding, only
+#  - OpenBSD side (openbsd/sys/**/*.c, compat/*.c, adapter/*.c): C, freestanding, only
 #    compat/include, openbsd/sys and clang's own headers, never Apple headers;
 #  - macOS side (kext/*.cpp): C++ against Kernel.framework.
 set -e
@@ -29,7 +29,7 @@ BSDFLAGS=($ARCH -x c -std=gnu11 -mkernel -ffreestanding -fno-builtin -fno-common
 OBJS=()
 BSD_MANIFEST=$(python3 scripts/sources.py get sources.openbsd.manifest)
 BSD_SOURCES=(${(f)"$(grep '\.c$' $BSD_MANIFEST)"})
-for src in openbsd/${^BSD_SOURCES} compat/*.c; do
+for src in openbsd/${^BSD_SOURCES} compat/*.c adapter/*.c; do
   o=$OUT/obj/bsd_${src:h:t}_${src:t:r}.o; clang "${BSDFLAGS[@]}" -c $src -o $o; OBJS+=$o
 done
 for src in kext/*.cpp; do

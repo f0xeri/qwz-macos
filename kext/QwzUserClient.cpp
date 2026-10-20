@@ -6,7 +6,7 @@
  * HeliPort finds us by IOClass "itlwm" (set in QwzWifi::start()), opens
  * this client (IOUserClientClass in Info.plist) and sends the requests in
  * kext/heliport.h. Each request maps to a qwzmac_qwz_* management call
- * (compat/autoconf.c), which does what ifconfig(8) would in OpenBSD.
+ * (adapter/control.c), which does what ifconfig(8) would in OpenBSD.
  *
  * Like itlwm, any local process may use it: the same as joining a network
  * from the menu bar. The passphrase is never logged and is wiped after the

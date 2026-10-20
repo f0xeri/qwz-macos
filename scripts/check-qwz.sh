@@ -1,6 +1,6 @@
 #!/bin/zsh
-# Compile-only check of the OpenBSD side (qwz + compat C files).
-# usage: scripts/check-qwz.sh [file.c ...]   (default: openbsd/ and compat/)
+# Compile-only check of the OpenBSD side (qwz + compat + adapter C files).
+# usage: scripts/check-qwz.sh [file.c ...]   (default: openbsd/, compat/ and adapter/)
 cd "${0:A:h}/.."
 RD=$(clang -print-resource-dir)
 CF=(-x c -std=gnu11 -arch x86_64 -mmacosx-version-min=11.0 -mkernel -ffreestanding
@@ -12,7 +12,7 @@ mkdir -p build/obj
 srcs=("$@"); if (( ! $#srcs )); then
   manifest=$(python3 scripts/sources.py get sources.openbsd.manifest) || exit 1
   files=(${(f)"$(grep '\.c$' $manifest)"})
-  srcs=(openbsd/${^files} compat/*.c(N))
+  srcs=(openbsd/${^files} compat/*.c(N) adapter/*.c(N))
 fi
 rc=0
 for f in $srcs; do
