@@ -1,0 +1,45 @@
+diff --git a/sys/net80211/ieee80211_node.c b/sys/net80211/ieee80211_node.c
+--- a/sys/net80211/ieee80211_node.c
++++ b/sys/net80211/ieee80211_node.c
+@@ -1735,6 +1735,31 @@ ieee80211_node_alloc(struct ieee80211com *ic)
+ void
+ ieee80211_node_cleanup(struct ieee80211com *ic, struct ieee80211_node *ni)
+ {
++#ifdef QWZMAC
++	/*
++	 * QWZMAC: cancel every node timer before draining any callback. Native
++	 * backing outlives timeout_del, even for INIT/nonpending agreements.
++	 * Cleanup covers both node_free and node_copy's destination.
++	 */
++	struct timeout *tos[4 * IEEE80211_NUM_TID + 2];
++	int ntos = 0, tid, i;
++
++	qwzmac_spl_lock();
++	for (tid = 0; tid < IEEE80211_NUM_TID; tid++) {
++		tos[ntos++] = &ni->ni_addba_req_to[tid];
++		tos[ntos++] = &ni->ni_tx_ba[tid].ba_to;
++		tos[ntos++] = &ni->ni_rx_ba[tid].ba_to;
++		tos[ntos++] = &ni->ni_rx_ba[tid].ba_gap_to;
++	}
++#ifndef IEEE80211_STA_ONLY
++	tos[ntos++] = &ni->ni_eapol_to;
++	tos[ntos++] = &ni->ni_sa_query_to;
++#endif
++	for (i = 0; i < ntos; i++)
++		timeout_del(tos[i]);
++	for (i = 0; i < ntos; i++)
++		timeout_destroy(tos[i]);
++#endif
+ 	if (ni->ni_rsnie != NULL) {
+ 		free(ni->ni_rsnie, M_DEVBUF, 2 + ni->ni_rsnie[1]);
+ 		ni->ni_rsnie = NULL;
+@@ -1744,6 +1769,9 @@ ieee80211_node_cleanup(struct ieee80211com *ic, struct ieee80211_node *ni)
+ 	mq_purge(&ni->ni_savedq);
+ #endif
+ 	ieee80211_node_free_unref_cb(ni);
++#ifdef QWZMAC
++	qwzmac_spl_unlock();
++#endif
+ }
+ 
+ void

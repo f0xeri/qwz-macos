@@ -3,8 +3,8 @@
  *
  * A taskq is one kernel thread draining a TAILQ under the spl lock; the
  * task function runs with the lock dropped, as OpenBSD runs tasks in
- * process context. A timeout is a thread_call; its handler also runs
- * without the spl lock.
+ * process context. A timeout is a thread_call; ordinary handlers run
+ * under spl, while TIMEOUT_PROC handlers run with spl dropped.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include <sys/param.h>
@@ -220,31 +220,34 @@ static void
 timeout_trampoline(void *arg)
 {
 	struct timeout *to = arg;
+	void (*fn)(void *);
+	void *fnarg;
+	int process;
 
-	qwzmac_spl_lock();
+	/* The backend enters with spl held: serialize ordinary callbacks/free. */
 	if (!(to->to_flags & TIMEOUT_ONQUEUE)) {
 		/* Deleted after the thread_call already fired. */
-		qwzmac_spl_unlock();
 		return;
 	}
 	to->to_flags &= ~TIMEOUT_ONQUEUE;
 	to->to_flags |= TIMEOUT_TRIGGERED;
-	qwzmac_spl_unlock();
-
-	to->to_func(to->to_arg);
+	fn = to->to_func;
+	fnarg = to->to_arg;
+	process = to->to_flags & TIMEOUT_PROC;
+	if (process)
+		qwzmac_spl_unlock();
+	fn(fnarg);
+	/* The callback may have destroyed its owner; use only local copies. */
+	if (process)
+		qwzmac_spl_lock();
 }
 
 void
 timeout_set_flags(struct timeout *to, void (*fn)(void *), void *arg,
     int kclock, int flags)
 {
-	/*
-	 * The struct may be uninitialized memory, so never trust an old
-	 * to_tc here. Re-initializing a live timeout leaks its thread_call.
-	 */
 	to->to_func = fn;
 	to->to_arg = arg;
-	to->to_tc = NULL;
 	to->to_kclock = kclock;
 	to->to_flags = flags | TIMEOUT_INITIALIZED;
 }
@@ -265,33 +268,29 @@ int
 timeout_add_nsec(struct timeout *to, uint64_t nsecs)
 {
 	int ret;
+	void *tc;
 
+	/* QWZMAC: backing belongs to this address, never to copied fields. */
+	qwzmac_spl_lock();
 	if (!(to->to_flags & TIMEOUT_INITIALIZED)) {
+		qwzmac_spl_unlock();
 		panic("timeout_add: not initialized");
 		return 0;
 	}
-	if (to->to_tc == NULL) {
-		void *tc = qwzmac_timer_alloc(timeout_trampoline, to);
-
+	tc = qwzmac_timer_lookup(timeout_trampoline, to);
+	if (tc == NULL) {
+		tc = qwzmac_timer_alloc(timeout_trampoline, to);
 		if (tc == NULL) {
+			qwzmac_spl_unlock();
 			printf("QwzWifi: timeout_add: no thread_call\n");
 			return 0;
 		}
-		qwzmac_spl_lock();
-		if (to->to_tc == NULL) {
-			to->to_tc = tc;
-			tc = NULL;
-		}
-		qwzmac_spl_unlock();
-		if (tc != NULL)
-			qwzmac_timer_free(tc);
 	}
 
-	qwzmac_spl_lock();
 	ret = !(to->to_flags & TIMEOUT_ONQUEUE);
 	to->to_flags |= TIMEOUT_ONQUEUE;
 	to->to_flags &= ~TIMEOUT_TRIGGERED;
-	qwzmac_timer_enter(to->to_tc, nsecs ? nsecs : 1);
+	qwzmac_timer_enter(tc, nsecs ? nsecs : 1);
 	qwzmac_spl_unlock();
 	return ret;
 }
@@ -326,12 +325,14 @@ int
 timeout_del(struct timeout *to)
 {
 	int ret;
+	void *tc;
 
 	qwzmac_spl_lock();
 	ret = (to->to_flags & TIMEOUT_ONQUEUE) != 0;
 	to->to_flags &= ~(TIMEOUT_ONQUEUE | TIMEOUT_TRIGGERED);
-	if (to->to_tc != NULL)
-		qwzmac_timer_cancel(to->to_tc);
+	tc = qwzmac_timer_lookup(timeout_trampoline, to);
+	if (tc != NULL)
+		qwzmac_timer_cancel(tc);
 	qwzmac_spl_unlock();
 	return ret;
 }
@@ -342,16 +343,20 @@ timeout_del_barrier(struct timeout *to)
 	int ret;
 
 	ret = timeout_del(to);
-	if (to->to_tc != NULL)
-		qwzmac_timer_cancel_wait(to->to_tc);
+	timeout_barrier(to);
 	return ret;
 }
 
 void
 timeout_barrier(struct timeout *to)
 {
-	if (to->to_tc != NULL)
-		qwzmac_timer_cancel_wait(to->to_tc);
+	void *tc;
+
+	qwzmac_spl_lock();
+	tc = qwzmac_timer_lookup(timeout_trampoline, to);
+	if (tc != NULL)
+		qwzmac_timer_cancel_wait(tc);
+	qwzmac_spl_unlock();
 }
 
 void
@@ -359,11 +364,10 @@ timeout_destroy(struct timeout *to)
 {
 	void *tc;
 
-	timeout_del_barrier(to);
 	qwzmac_spl_lock();
-	tc = to->to_tc;
-	to->to_tc = NULL;
-	qwzmac_spl_unlock();
+	timeout_del_barrier(to);
+	tc = qwzmac_timer_lookup(timeout_trampoline, to);
 	if (tc != NULL)
 		qwzmac_timer_free(tc);
+	qwzmac_spl_unlock();
 }

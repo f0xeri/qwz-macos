@@ -20,10 +20,12 @@
 extern int test_dma_fake_high;
 extern int test_quiet;
 extern unsigned test_panics;
+#include "kernel_api.h"
 
 static int failures, checks;
 
 int	test_wpa(int *, int *);
+void	test_node_timers(int *, int *);
 
 #define CHECK(c) do {							\
 	checks++;							\
@@ -349,6 +351,52 @@ test_timeout(void)
 	delay(80000);
 	CHECK(to_ran == 1);
 	CHECK(timeout_del(&to) == 0);
+
+	/* BA renegotiation: set/add/del must reuse the owner's backing timer. */
+	unsigned allocated = test_timer_allocations();
+	for (int i = 0; i < 100; i++) {
+		if (i & 1)
+			timeout_set_proc(&to, to_fn, NULL);
+		else
+			timeout_set(&to, to_fn, NULL);
+		timeout_add_msec(&to, 30);
+		timeout_del(&to);
+	}
+	CHECK(test_timer_allocations() == allocated);
+	/* A copy cannot cancel/destroy the source's registered timer. */
+	timeout_add_msec(&to, 10);
+	struct timeout copy = to;
+	timeout_destroy(&copy);
+	delay(50000);
+	CHECK(to_ran == 2);
+	timeout_set_flags(&copy, to_fn, NULL, KCLOCK_NONE, TIMEOUT_PROC);
+	CHECK(test_timer_allocations() == allocated);
+	timeout_add_msec(&copy, 30);
+	timeout_del(&copy);
+	CHECK(test_timer_allocations() == allocated + 1);
+	allocated = test_timer_allocations();
+	copy = to;
+	timeout_set(&copy, to_fn, NULL);
+	timeout_add_msec(&copy, 30);
+	timeout_del(&copy);
+	CHECK(test_timer_allocations() == allocated);
+	timeout_destroy(&copy);
+	timeout_set(&copy, to_fn, NULL);
+	timeout_add_msec(&copy, 30);
+	timeout_del(&copy);
+	CHECK(test_timer_allocations() == allocated + 1);
+	timeout_destroy(&copy);
+	/* Static initialization also needs no native handle in the struct. */
+	struct timeout preset = TIMEOUT_INITIALIZER(to_fn, NULL);
+	timeout_add_msec(&preset, 30);
+	timeout_del(&preset);
+	timeout_destroy(&preset);
+	CHECK(test_timer_allocations() == allocated + 2);
+	/* The retained backing still fires the callback after reconfiguration. */
+	timeout_set(&to, to_fn, NULL);
+	timeout_add_msec(&to, 1);
+	delay(50000);
+	CHECK(to_ran == 3);
 	timeout_destroy(&to);
 }
 
@@ -501,6 +549,7 @@ test_rddm(void)
 int
 main(void)
 {
+	test_kernel_start();
 	test_rddm();
 	test_crc32();
 	test_pbkdf2();
@@ -510,7 +559,10 @@ main(void)
 	test_bus_dma();
 	test_task();
 	test_timeout();
+	test_node_timers(&checks, &failures);
 	test_locks();
+	CHECK(test_timer_live() == 0 && test_iokit_live() == 0);
+	test_kernel_stop();
 	qwzmac_log("compat tests: %d checks, %d failures\n", checks, failures);
 	return failures ? 1 : 0;
 }

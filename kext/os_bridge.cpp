@@ -1,6 +1,7 @@
 /*
  * QwzWifi: implementation of qwzmac/os.h on IOKit and Mach.
- * This is the only place where the OpenBSD side touches macOS.
+ * Hardware and miscellaneous services; locks and timers are in os_lock.cpp
+ * and os_timer.cpp so host tests can compile those implementations directly.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include <IOKit/IOLib.h>
@@ -22,17 +23,10 @@
 
 #define QLOG(fmt, ...) qwzmac_log("QwzWifi: " fmt "\n", ##__VA_ARGS__)
 
-static IORecursiveLock	*gSpl;
 static IOService	*gOwner;
 static IOPCIDevice	*gPci;
 static IOWorkLoop	*gWorkLoop;
 static IOMemoryMap	*gBarMap[6];
-
-struct qwzmac_timer;
-static IOLock		*gTimerLock;	/* protects gTimers */
-static qwzmac_timer	*gTimers;
-static volatile int	 gTimersDead;
-static volatile int	 gTimersRunning;
 
 #define QWZMAC_MAX_INTR	4
 struct qwzmac_intr {
@@ -51,32 +45,25 @@ static qwzmac_intr gIntr[QWZMAC_MAX_INTR];
 bool
 qwzmac_os_init(IOService *owner, IOPCIDevice *pci)
 {
-	gSpl = IORecursiveLockAlloc();
-	if (gSpl == nullptr)
+	if (!qwzmac_spl_init())
 		return false;
-	gTimerLock = IOLockAlloc();
+	bool timersReady = qwzmac_timers_init();
 	gWorkLoop = IOWorkLoop::workLoop();
-	if (gWorkLoop == nullptr || gTimerLock == nullptr) {
+	if (gWorkLoop == nullptr || !timersReady) {
 		if (gWorkLoop != nullptr)
 			gWorkLoop->release();
 		gWorkLoop = nullptr;
-		if (gTimerLock != nullptr)
-			IOLockFree(gTimerLock);
-		gTimerLock = nullptr;
-		IORecursiveLockFree(gSpl);
-		gSpl = nullptr;
+		if (timersReady)
+			qwzmac_timers_fini();
+		qwzmac_spl_fini();
 		return false;
 	}
-	gTimers = nullptr;
-	gTimersDead = 0;
 	gOwner = owner;
 	gPci = pci;
 	bzero(gIntr, sizeof(gIntr));
 	bzero(gBarMap, sizeof(gBarMap));
 	return true;
 }
-
-static void qwzmac_timers_fini(void);
 
 void
 qwzmac_os_fini(void)
@@ -104,10 +91,7 @@ qwzmac_os_fini(void)
 		gWorkLoop->release();
 		gWorkLoop = nullptr;
 	}
-	if (gSpl != nullptr) {
-		IORecursiveLockFree(gSpl);
-		gSpl = nullptr;
-	}
+	qwzmac_spl_fini();
 	gOwner = nullptr;
 	gPci = nullptr;
 }
@@ -153,56 +137,6 @@ qwzmac_delay_us(unsigned int us)
 	IODelay(us);
 }
 
-/* spl lock, sleep, wakeup. */
-
-void
-qwzmac_spl_lock(void)
-{
-	IORecursiveLockLock(gSpl);
-}
-
-void
-qwzmac_spl_unlock(void)
-{
-	IORecursiveLockUnlock(gSpl);
-}
-
-int
-qwzmac_spl_held(void)
-{
-	return IORecursiveLockHaveLock(gSpl) ? 1 : 0;
-}
-
-int
-qwzmac_sleep(const void *ident, uint64_t nsecs)
-{
-	int res;
-
-	if (!IORecursiveLockHaveLock(gSpl)) {
-		QLOG("qwzmac_sleep without the spl lock");
-		OSReportWithBacktrace("QwzWifi: bad sleep");
-		return EINVAL;
-	}
-	if (nsecs == 0) {
-		res = IORecursiveLockSleep(gSpl, (void *)ident, THREAD_UNINT);
-	} else {
-		uint64_t abs, deadline;
-
-		nanoseconds_to_absolutetime(nsecs, &abs);
-		clock_get_uptime(&deadline);
-		deadline += abs;
-		res = IORecursiveLockSleepDeadline(gSpl, (void *)ident,
-		    deadline, THREAD_UNINT);
-	}
-	return res == THREAD_TIMED_OUT ? EWOULDBLOCK : 0;
-}
-
-void
-qwzmac_wakeup(const void *ident, int one)
-{
-	IORecursiveLockWakeup(gSpl, (void *)ident, one != 0);
-}
-
 /* Threads. */
 
 struct qwzmac_thread_arg {
@@ -245,156 +179,6 @@ qwzmac_thread_start(void (*fn)(void *), void *arg)
 	}
 	thread_deallocate(thread);
 	return 0;
-}
-
-/* Timers. */
-
-/*
- * thread_call_cancel_wait() is private KPI, so running callbacks are
- * counted here and waited for by polling.
- *
- * Every timer is also kept on a list: a timeout(9) lives inside a softc,
- * and nothing in qwz/net80211 frees its thread_call. qwzmac_timers_quiesce()
- * stops them all before the softc is freed, os_fini frees them.
- */
-struct qwzmac_timer {
-	thread_call_t	tc;
-	void		(*fn)(void *);
-	void		*arg;
-	volatile int	running;
-	qwzmac_timer	*next, **prevp;
-};
-
-
-static void
-qwzmac_timer_main(thread_call_param_t p0, thread_call_param_t p1)
-{
-	qwzmac_timer *t = (qwzmac_timer *)p0;
-
-	(void)p1;
-	__atomic_add_fetch(&gTimersRunning, 1, __ATOMIC_SEQ_CST);
-	__atomic_add_fetch(&t->running, 1, __ATOMIC_SEQ_CST);
-	if (!__atomic_load_n(&gTimersDead, __ATOMIC_SEQ_CST))
-		t->fn(t->arg);
-	__atomic_sub_fetch(&t->running, 1, __ATOMIC_SEQ_CST);
-	__atomic_sub_fetch(&gTimersRunning, 1, __ATOMIC_SEQ_CST);
-}
-
-void
-qwzmac_timers_quiesce(void)
-{
-	__atomic_store_n(&gTimersDead, 1, __ATOMIC_SEQ_CST);
-	if (gTimerLock != nullptr) {
-		IOLockLock(gTimerLock);
-		for (qwzmac_timer *t = gTimers; t != nullptr; t = t->next)
-			thread_call_cancel(t->tc);
-		IOLockUnlock(gTimerLock);
-	}
-	while (__atomic_load_n(&gTimersRunning, __ATOMIC_SEQ_CST) > 0)
-		IOSleep(1);
-}
-
-static void
-qwzmac_timers_fini(void)
-{
-	qwzmac_timers_quiesce();
-	if (gTimerLock == nullptr)
-		return;
-	for (;;) {
-		IOLockLock(gTimerLock);
-		qwzmac_timer *t = gTimers;
-		IOLockUnlock(gTimerLock);
-		if (t == nullptr)
-			break;
-		qwzmac_timer_free(t);
-	}
-	IOLockFree(gTimerLock);
-	gTimerLock = nullptr;
-}
-
-void *
-qwzmac_timer_alloc(void (*fn)(void *), void *arg)
-{
-	qwzmac_timer *t;
-
-	t = (qwzmac_timer *)IOMalloc(sizeof(*t));
-	if (t == nullptr)
-		return nullptr;
-	t->fn = fn;
-	t->arg = arg;
-	t->running = 0;
-	t->tc = thread_call_allocate(qwzmac_timer_main, t);
-	if (t->tc == nullptr) {
-		IOFree(t, sizeof(*t));
-		return nullptr;
-	}
-	IOLockLock(gTimerLock);
-	t->next = gTimers;
-	if (gTimers != nullptr)
-		gTimers->prevp = &t->next;
-	t->prevp = &gTimers;
-	gTimers = t;
-	IOLockUnlock(gTimerLock);
-	return t;
-}
-
-void
-qwzmac_timer_free(void *p)
-{
-	qwzmac_timer *t = (qwzmac_timer *)p;
-
-	if (t == nullptr)
-		return;
-	qwzmac_timer_cancel_wait(t);
-	IOLockLock(gTimerLock);
-	*t->prevp = t->next;
-	if (t->next != nullptr)
-		t->next->prevp = t->prevp;
-	IOLockUnlock(gTimerLock);
-	if (!thread_call_free(t->tc)) {
-		QLOG("timer still pending at free, leaking it");
-		return;
-	}
-	IOFree(t, sizeof(*t));
-}
-
-int
-qwzmac_timer_enter(void *p, uint64_t nsecs)
-{
-	qwzmac_timer *t = (qwzmac_timer *)p;
-	uint64_t abs, deadline;
-
-	nanoseconds_to_absolutetime(nsecs, &abs);
-	clock_get_uptime(&deadline);
-	deadline += abs;
-	return thread_call_enter_delayed(t->tc, deadline) ? 1 : 0;
-}
-
-int
-qwzmac_timer_cancel(void *p)
-{
-	qwzmac_timer *t = (qwzmac_timer *)p;
-
-	return thread_call_cancel(t->tc) ? 1 : 0;
-}
-
-int
-qwzmac_timer_cancel_wait(void *p)
-{
-	qwzmac_timer *t = (qwzmac_timer *)p;
-
-	/*
-	 * A running handler may be waiting for the spl lock; waiting for it
-	 * while holding that lock would deadlock. Only cancel in that case.
-	 */
-	int cancelled;
-
-	cancelled = thread_call_cancel(t->tc) ? 1 : 0;
-	if (IORecursiveLockHaveLock(gSpl))
-		return cancelled;
-	while (__atomic_load_n(&t->running, __ATOMIC_SEQ_CST) > 0)
-		IOSleep(1);
-	return cancelled;
 }
 
 /* DMA memory. */
@@ -559,10 +343,10 @@ qwzmac_intr_action(OSObject *owner, IOInterruptEventSource *src, int count)
 		if (ih->count <= 3 || (ih->count % 10000) == 0)
 			QLOG("interrupt %s #%llu (%d coalesced)", ih->name,
 			    (unsigned long long)ih->count, count);
-		IORecursiveLockLock(gSpl);
+		qwzmac_spl_lock();
 		if (!ih->dying)
 			ih->fn(ih->arg);
-		IORecursiveLockUnlock(gSpl);
+		qwzmac_spl_unlock();
 		return;
 	}
 }
@@ -633,7 +417,7 @@ qwzmac_pci_intr_disestablish(void *dev, void *cookie)
 	 * removeEventSource() waits for a running action, and the action may
 	 * be waiting for the spl lock we hold: leave removal to os_fini.
 	 */
-	if (IORecursiveLockHaveLock(gSpl)) {
+	if (qwzmac_spl_held()) {
 		QLOG("interrupt %s disabled; removal deferred", ih->name);
 		return;
 	}

@@ -11,6 +11,12 @@ class IOPCIDevice;
 bool	qwzmac_os_init(IOService *owner, IOPCIDevice *pci);
 void	qwzmac_os_fini(void);
 
+/* Internal bridge components; locks outlive timers. */
+bool	qwzmac_spl_init(void);
+void	qwzmac_spl_fini(void);
+bool	qwzmac_timers_init(void);
+void	qwzmac_timers_fini(void);
+
 /*
  * qwzlog.cpp: publish the driver log as the "QwzLog" property of owner (the
  * PCI device). qwzmac_log_stop() must run before the kext can go away.

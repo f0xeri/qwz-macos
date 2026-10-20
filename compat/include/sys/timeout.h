@@ -1,6 +1,8 @@
 /*
  * QwzWifi compat: OpenBSD timeout(9), real signatures, backed by
- * thread_call. Handlers always run in a thread ("process context").
+ * thread_call. Callbacks run in threads; ordinary handlers hold spl,
+ * while TIMEOUT_PROC handlers drop it.
+ * Native backing is keyed by this object's address, outside copied fields.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #ifndef _QWZMAC_SYS_TIMEOUT_H_
@@ -11,7 +13,6 @@
 struct timeout {
 	void	(*to_func)(void *);
 	void	*to_arg;
-	void	*to_tc;			/* QWZMAC: thread_call, lazily made */
 	int	to_flags;
 	int	to_kclock;
 };
@@ -33,7 +34,6 @@ struct timeout {
 #define TIMEOUT_INITIALIZER_FLAGS(_fn, _arg, _kclock, _flags) {		\
 	.to_func = (_fn),						\
 	.to_arg = (_arg),						\
-	.to_tc = NULL,							\
 	.to_flags = (_flags) | TIMEOUT_INITIALIZED,			\
 	.to_kclock = (_kclock)						\
 }

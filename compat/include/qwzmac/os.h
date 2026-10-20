@@ -1,7 +1,7 @@
 /*
  * QwzWifi: the boundary between the OpenBSD compat layer (C) and macOS
  * (IOKit/Mach, C++). Only plain C types cross this line. Implemented in
- * kext/os_bridge.cpp.
+ * kext/os_bridge.cpp, kext/os_lock.cpp and kext/os_timer.cpp.
  *
  * Concurrency model: one global recursive lock stands in for OpenBSD's
  * spl levels (splnet() takes it, splx() drops it). Interrupt handlers,
@@ -48,13 +48,15 @@ int	qwzmac_thread_start(void (*fn)(void *), void *arg);
 /* Opaque non-zero identity of the calling thread. */
 unsigned long qwzmac_thread_self(void);
 
-/* One-shot timers (thread_call). The callback runs in a thread. */
+/* One-shot timers. Backend invokes the callback in a thread with spl held. */
 void	*qwzmac_timer_alloc(void (*fn)(void *), void *arg);
+/* Existing backing for this wrapper/owner pair; does not read owner memory. */
+void	*qwzmac_timer_lookup(void (*fn)(void *), void *arg);
 void	qwzmac_timer_free(void *t);
 /* Both return 1 if the timer was pending before the call. */
 int	qwzmac_timer_enter(void *t, uint64_t nsecs);
 int	qwzmac_timer_cancel(void *t);
-/* Cancel and wait for a running callback to finish. */
+/* Cancel/drain, temporarily releasing spl while waiting; never wait for self. */
 int	qwzmac_timer_cancel_wait(void *t);
 /*
  * Cancel every timer, wait for running callbacks, and make later firings
