@@ -11,7 +11,7 @@ kext, with an optional second kext that makes the card a native Wi-Fi interface 
 
 | Kext | What it is | Runs on |
 |---|---|---|
-| `QwzWifi.kext` | The driver: OpenBSD qwz(4) + net80211, firmware, DMA, interrupts. Without the native front it appears as an Ethernet interface ("Qualcomm Wi-Fi") controlled by [HeliPort](https://github.com/OpenIntelWireless/HeliPort) or `qwzctl`. | x86_64 macOS, see [macOS versions](#macos-versions) |
+| `QwzWifi.kext` | The driver: OpenBSD qwz(4) + net80211, firmware, DMA, interrupts. Without the native front it appears as an Ethernet interface ("Qualcomm Wi-Fi") controlled by [HeliPort](https://github.com/OpenIntelWireless/HeliPort) or `qwzctl`. | macOS Tahoe (26), x86_64, see [macOS versions](#macos-versions) |
 | `QwzAirport.kext` | The native Wi-Fi front: the card appears in the Wi-Fi menu and System Settings as Wi-Fi. No hardware access; it talks to QwzWifi through a small C interface (`kext/airport_api.h`). | macOS 26.7.1 build **25G241** only |
 
 ## What works
@@ -50,15 +50,19 @@ OpenCore, firmware WLAN.HMT.1.1.c5-00302 (linux-firmware `20260309`).
 
 ## macOS versions
 
+**macOS Tahoe (26) only.** Nothing else is supported or tested; macOS 27 does not run on Intel Macs.
+
 | | QwzWifi | QwzAirport |
 |---|---|---|
-| Declared minimum | KPI 19.0 (macOS 10.15), built with `-mmacosx-version-min=11.0` | Darwin 25 (OpenCore `MinKernel 25.0.0`, `MaxKernel 25.99.99`) |
 | Hard limit in code | none besides `-qwzon`; x86_64 only | `kern.osversion` must be in `QwzAirportBuilds` (`airport/Info.plist`): today only `25G241` |
+| OpenCore entry | no `MinKernel`/`MaxKernel` | `MinKernel 25.0.0`, `MaxKernel 25.99.99` |
 | Tested | 26.7.1 (25G241) | 26.7.1 (25G241) |
 
-Older macOS versions are untested. A new Tahoe build is added to `QwzAirportBuilds` only after
+QwzWifi is built with `-mmacosx-version-min=11.0` and declares KPI 19.0, so older systems may load
+it, but it was never run there. On another Tahoe build QwzAirport stays off and QwzWifi falls back
+to HeliPort (see [Limitations](#limitations)). A build is added to `QwzAirportBuilds` only after
 `scripts/kc-abi.py --check` and `--returns` pass on it (they compare our IO80211 headers with the
-kernel's actual class layouts). macOS 27 does not support Intel Macs.
+kernel's actual class layouts).
 
 ## Building
 
