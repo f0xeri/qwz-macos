@@ -1,15 +1,7 @@
 /*
- * QwzAirportInterface: the Wi-Fi interface macOS's Wi-Fi stack (WCL) talks
- * to (an IO80211InfraProtocol). Stage C2: power, capabilities, channels,
- * state, availability and full scan (C3); join (C4) is not there yet.
- *
- * Based on AirportItlwmSkywalkInterface and WCL of laobamac/itlwm 738d4c6
- * (AirportItlwm/AirportItlwmSkywalkInterface.cpp, WCL/WCL.cpp): message
- * layouts (airport/WCL.hpp, unmodified) and the order of the lifecycle
- * messages. Their net80211 accesses are replaced by kext/airport_api.h
- * calls (airport/CREDITS). Every request this class does not implement
- * returns kIOReturnUnsupported from QwzAirportStubs.inc, which
- * scripts/airport-stubs.py generates from the pure virtuals of airport/abi.
+ * Native Wi-Fi interface for scans, joins, power and link status.
+ * Based on laobamac/itlwm 738d4c6 (airport/CREDITS); hardware access uses
+ * kext/airport_api.h. Unimplemented requests use generated Unsupported stubs.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #ifndef QWZ_AIRPORT_INTERFACE_HPP
@@ -66,6 +58,7 @@ public:
 
 private:
 	void postDriverAvailable(bool available);
+	void restorePower();
 	static void joinTc(thread_call_param_t, thread_call_param_t);
 	static IOReturn joinCommand(OSObject *, void *, void *, void *, void *);
 	void finishJoin(IOReturn);

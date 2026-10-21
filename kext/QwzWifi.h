@@ -21,8 +21,6 @@
 
 #define QLOG(fmt, ...) qwzmac_log("QwzWifi: " fmt "\n", ##__VA_ARGS__)
 
-#define QWZ_VERSION	"0.0.23"
-
 class QwzWifi : public IOEthernetController {
 	OSDeclareDefaultStructors(QwzWifi)
 public:

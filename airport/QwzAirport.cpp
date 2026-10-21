@@ -4,7 +4,7 @@
  * Injected by OpenCore: it matches QwzAirportNub after asynchronous build
  * validation. The nub forwards callPlatformFunction() to the running QwzWifi
  * (kext/airport_api.h) and publishes a Wi-Fi interface. QwzWifi keeps its
- * Ethernet interface and HeliPort; the data path moves here in stage C4.
+ * Ethernet interface for HeliPort; native mode routes data through this front.
  *
  * Starts only on the macOS builds whose IO80211/Skywalk ABI was checked
  * with scripts/kc-abi.py --check (QwzAirportBuilds in Info.plist).
@@ -15,7 +15,6 @@
 #include "QwzAirport.hpp"
 #include "QwzAirportInterface.hpp"
 #include "QwzAirportEthernet.hpp"
-#include "PowerWorker.hpp"
 
 #include <IOKit/network/IONetworkMedium.h>
 #include <IOKit/network/IOOutputQueue.h>

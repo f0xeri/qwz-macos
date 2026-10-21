@@ -1,6 +1,5 @@
 #!/bin/zsh
-# Builds build/QwzWifi.kext with Command Line Tools only (no Xcode).
-# Proven pattern: same flags built XHCIProbe.kext on this machine.
+# Builds both kexts and command-line tools with Command Line Tools only.
 #
 # Two worlds are compiled separately:
 #  - OpenBSD side (openbsd/sys/**/*.c, compat/*.c, adapter/*.c): C, freestanding, only
@@ -18,8 +17,12 @@ scripts/patches.sh check
 RD=$(clang -print-resource-dir)
 OUT=build; mkdir -p $OUT/obj
 ARCH=(-arch x86_64 -mmacosx-version-min=11.0)
+# Info.plist owns each bundle version, including log strings and kmod metadata.
+WIFI_VERSION=$(plutil -extract CFBundleVersion raw -o - kext/Info.plist)
+AIRPORT_VERSION=$(plutil -extract CFBundleVersion raw -o - airport/Info.plist)
 COMMON=($ARCH -mkernel -fno-builtin -fno-common -O2 -Wall
-        -isysroot "$SDK" -I"$KH" -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT)
+        -isysroot "$SDK" -I"$KH" -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT
+        "-DQWZ_VERSION=\"$WIFI_VERSION\"" "-DQWZ_AIRPORT_VERSION=\"$AIRPORT_VERSION\"")
 # IOPCIDevice/IONetworking/mbuf KPIs are marked deprecated in favour of DriverKit; still public.
 CXXFLAGS=(-std=gnu++17 -fapple-kext -fno-rtti -fno-exceptions -Wno-deprecated-declarations)
 BSDFLAGS=($ARCH -x c -std=gnu11 -mkernel -ffreestanding -fno-builtin -fno-common -O2
@@ -82,6 +85,6 @@ rm -rf $OUT/QwzAirport.kext; mkdir -p $OUT/QwzAirport.kext/Contents/MacOS
 cp airport/Info.plist $OUT/QwzAirport.kext/Contents/Info.plist
 cp $OUT/QwzAirport.bin $OUT/QwzAirport.kext/Contents/MacOS/QwzAirport
 plutil -lint $OUT/QwzAirport.kext/Contents/Info.plist
-# Loaded by hand while in development (kmutil load), so sign it ad hoc.
+# Keep an ad-hoc signature on the native bundle. Deployment uses OpenCore.
 codesign -s - -f $OUT/QwzAirport.kext 2>/dev/null || echo "WARNING: QwzAirport.kext not signed"
 echo "OK: $(pwd)/$OUT/QwzWifi.kext, $(pwd)/$OUT/QwzAirport.kext, $(pwd)/$OUT/qwzctl"

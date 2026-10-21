@@ -8,29 +8,27 @@ struct Data { uint32_t version, radios, state[4]; };
 static_assert(sizeof(Data) == 24, "WCL power request size");
 static constexpr unsigned SetRequest = 0x802869c8;
 static constexpr unsigned PowerCommand = 19;
-// Controller postMessage queues both PostOffice and Glue work. Its return
-// does not acknowledge WCL readiness. Arm before posting ready; acknowledge
-// only from the fwLoadComplete scan-home/away callback, then consume once on
-// radioTc. A new DOWN cancels the old recovery, including a queued callback.
+// Posting ready is asynchronous. Wait for WCL's scan-home/away callback,
+// then consume once on radioTc. DOWN cancels pending recovery.
 class Recovery {
+    enum { Idle, Waiting, Ready };
     unsigned state;
 public:
-    void cancel() { __atomic_store_n(&state, 0u, __ATOMIC_SEQ_CST); }
-    void arm() { __atomic_store_n(&state, 1u, __ATOMIC_SEQ_CST); }
+    void cancel() { __atomic_store_n(&state, unsigned(Idle), __ATOMIC_SEQ_CST); }
+    void arm() { __atomic_store_n(&state, unsigned(Waiting), __ATOMIC_SEQ_CST); }
     bool acknowledge() {
-        unsigned expected = 1;
-        return __atomic_compare_exchange_n(&state, &expected, 2u, false,
+        unsigned expected = Waiting;
+        return __atomic_compare_exchange_n(&state, &expected, unsigned(Ready), false,
             __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
     }
     bool take() {
-        unsigned expected = 2;
-        return __atomic_compare_exchange_n(&state, &expected, 0u, false,
+        unsigned expected = Ready;
+        return __atomic_compare_exchange_n(&state, &expected, unsigned(Idle), false,
             __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
     }
 };
-// Load intent AFTER ready callbacks: they can synchronously issue a newer OFF.
-// The sender re-enters WCL, not the hardware power path. A repeated actual ON
-// is acknowledged by the ordinary power worker without restarting firmware.
+// Read intent after ready callbacks so a newer OFF wins. The ordinary power
+// worker acknowledges an already-ON device without restarting firmware.
 template<class Load, class Send, class Fallback, class Notify, class Report>
 void recover(bool acknowledged, bool ready, Load load, Send send, Fallback fallback,
     Notify notify, Report report)
@@ -40,8 +38,7 @@ void recover(bool acknowledged, bool ready, Load load, Send send, Fallback fallb
     if (!intent.serial || !intent.wanted) return;
     Data data = {1, 1, {1, 0, 0, 0}};
     int result = send(SetRequest, PowerCommand, &data, sizeof(data));
-    // SSM observes POWER but may leave it unhandled. Apple's normal wrapper
-    // then calls the driver's setPOWER; this is not a failed power request.
+    // Match Apple's setPOWER wrapper when WCL leaves the request unhandled.
     if (static_cast<uint32_t>(result) == 0xe082280f) result = fallback(&data);
     report(intent, result);
     if (result == 0) notify(); // same POWER_CHANGED completion as normal setPOWER

@@ -1,15 +1,7 @@
 /*
- * QwzAirport: the native Wi-Fi front of QwzWifi (docs/native-wifi-research.md
- * §8.5, PLAN.md "Этап C2"). An IO80211Controller on top of the QwzWifi
- * service: macOS's Wi-Fi stack (WCL) talks to it, and it talks to QwzWifi
- * only through kext/airport_api.h. No OpenBSD code and no hardware access
- * here: everything that touches the chip or net80211 is in QwzWifi.
- *
- * Based on AirportItlwmV2 of laobamac/itlwm 738d4c6 (AirportItlwm/
- * AirportItlwmV2.cpp, .hpp; itself AirportItlwm by zxystd, OpenIntelWireless):
- * work queue, CoreCapture pipes and fault reporter, interface setup. The
- * PCI, power management and itlwm HAL parts are gone (QwzWifi owns the
- * device); requests go to QwzWifi instead of net80211 (airport/CREDITS).
+ * Native Wi-Fi controller over kext/airport_api.h. QwzWifi owns the hardware
+ * and OpenBSD stack. Interface setup, work queue and CoreCapture support are
+ * based on laobamac/itlwm 738d4c6 (airport/CREDITS).
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #ifndef QWZ_AIRPORT_HPP
@@ -41,8 +33,6 @@ static inline void qwz_airport_log(const char *format, ...)
 	os_log(OS_LOG_DEFAULT, "QwzAirport: %{public}s", text);
 }
 #define ALOG(...) qwz_airport_log(__VA_ARGS__)
-
-#define QWZ_AIRPORT_VERSION	"0.3.7"
 
 class QwzAirportInterface;
 class QwzAirportEthernet;
@@ -139,7 +129,7 @@ private:
 	QwzAirportInterface	*fNetIf;	/* the Wi-Fi interface WCL uses */
 	QwzAirportEthernet	*fBsdIf;	/* its BSD (data) interface */
 
-	uint8_t			 fPowerState;	/* what WCL set (setPOWER) */
+	uint8_t			 fPowerState;	/* reported state; hardware events also update it */
 	uint32_t fPowerSerial;
 	volatile int		 fPowerWanted;	/* for powerTc() */
 	thread_call_t		 fPowerTc;
