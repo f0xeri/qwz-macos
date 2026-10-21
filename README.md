@@ -112,6 +112,18 @@ Pins and hashes are in `config/sources.json`; `docs/DEPENDENCIES.md` explains up
 - The HeliPort/`qwzctl` control interface opens only for the user logged in at the console and for
   root (switching to HeliPort mode needs root).
 
+## Disclaimer
+
+This software is provided **as is, without warranty of any kind**, express or implied, as stated in
+sections 11 and 12 of the GNU GPL v2 (`LICENSE`). It is a kernel driver for unsupported hardware on
+an unsupported platform: use it at your own risk. The authors are not liable for any damage it may
+cause, including kernel panics, data loss, memory corruption, an unbootable system or damage to
+hardware.
+
+This project is independent. It is not affiliated with or endorsed by Qualcomm, Apple, OpenBSD or the
+authors of the projects it builds on. Qualcomm, macOS, Wi-Fi and other names are trademarks of their
+respective owners.
+
 ## License and credits
 
 QwzWifi is free software under the **GNU General Public License, version 2 only** (`LICENSE`).
