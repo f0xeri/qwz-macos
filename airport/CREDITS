@@ -4,14 +4,13 @@ QwzAirport is the native Wi-Fi front of QwzWifi (docs/native-wifi-research.md §
 It is GPL-2.0, like kext/. It starts from the native front of laobamac/itlwm, commit
 738d4c61b5a64433b27c1ab09dba94916ab77d8d (https://github.com/laobamac/itlwm, GPL-2.0),
 itself based on AirportItlwm by zxystd and the OpenIntelWireless contributors
-(https://github.com/OpenIntelWireless/itlwm). ABI headers and WCL.hpp are reproducible imports from the configured revision
-(config/sources.json; scripts/airport-vendor.sh apply/check/export). The runtime front
-is adapted code: later fixes are reviewed and ported by hand, never overwritten by
-the importer. The pinned clone is fetched with scripts/fetch-sources.sh --imports.
+(https://github.com/OpenIntelWireless/itlwm). Everything here, ABI headers and WCL.hpp
+included, is our copy: later fixes in the fork are reviewed and ported by hand
+(abi/UPSTREAM says how to diff against it).
 
 Taken, and from which file of laobamac/itlwm 738d4c6:
-- abi/Airport/: IO80211/Skywalk/CoreCapture headers from include/Airport/ (Tahoe subset),
-  copied by scripts/airport-vendor.sh; our change is abi/qwzairport.patch (QWZAIRPORT).
+- abi/Airport/: IO80211/Skywalk/CoreCapture headers from include/Airport/ (Tahoe subset);
+  our changes are marked QWZAIRPORT/QWZMAC.
   apple80211_var.h, apple80211_ioctl.h are Apple's (APSL headers, as published).
   The headers are trusted only after scripts/kc-abi.py --check on the running build.
 - WCL.hpp: AirportItlwm/WCL/WCL.hpp, unmodified (message ids and layouts, request decoders).
@@ -27,7 +26,7 @@ Taken, and from which file of laobamac/itlwm 738d4c6:
 Ours: kext/airport_api.h and its implementation in kext/QwzWifi.cpp, adapter/'s
 qwzmac_qwz_channels()/qwzmac_qwz_country()/radio callback, QWZMAC patches in qwz,
 scripts/airport-stubs.py (QwzAirportStubs.inc), scripts/kc-abi.py, scripts/kc-classsize.py,
-scripts/kclib.py, scripts/airport-vendor.sh.
+scripts/kclib.py.
 
 C4 MAC reconfiguration / deferred-join ordering was compared with
 mnnobre/AirportMtkWlan b880d9cd155ba076ae86dc02556f215fd82723d5

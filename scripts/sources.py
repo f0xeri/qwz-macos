@@ -11,7 +11,7 @@ import sys
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("get", "list", "paths", "file-url", "set-revision"))
-    parser.add_argument("args", nargs="+")
+    parser.add_argument("args", nargs="*")
     args = parser.parse_args()
     path = Path(__file__).resolve().parent.parent / "config/sources.json"
     data = json.loads(path.read_text())
@@ -23,10 +23,7 @@ def main():
             value = value[key]
         print("\n".join(value) if isinstance(value, (dict, list)) else value)
     elif args.command == "list":
-        if len(args.args) != 1 or args.args[0] not in ("build", "import"):
-            parser.error("list requires build or import")
-        print("\n".join(name for name, entry in data["sources"].items()
-                        if entry["usage"] == args.args[0]))
+        print("\n".join(data["sources"]))
     elif args.command == "paths":
         if len(args.args) != 1:
             parser.error("paths requires a source name")

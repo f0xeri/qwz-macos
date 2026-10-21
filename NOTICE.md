@@ -59,7 +59,8 @@ The native Wi-Fi front is adapted from the native front of **laobamac/itlwm**
 the OpenIntelWireless contributors (https://github.com/OpenIntelWireless/itlwm). Both GPL-2.0.
 `airport/CREDITS` lists which of our files come from which of theirs. Some request handling was
 compared with **mnnobre/AirportMtkWlan** (GPL-2.0, commit `b880d9c`). `airport/WCL.hpp` and
-`airport/abi/` are copies from laobamac/itlwm (`airport/abi/UPSTREAM`, `airport/abi/LICENSE`).
+`airport/abi/` were copied from laobamac/itlwm and are edited here (`airport/abi/UPSTREAM`,
+`airport/abi/LICENSE`).
 
 ### Apple headers in `airport/abi/` (APSL-2.0)
 `apple80211_ioctl.h`, `apple80211_var.h` and `apple_private_spi.h` are Apple header files under the

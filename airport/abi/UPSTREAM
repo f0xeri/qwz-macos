@@ -1,2 +1,14 @@
-https://github.com/laobamac/itlwm.git 738d4c61b5a64433b27c1ab09dba94916ab77d8d include/Airport + AirportItlwm/WCL/WCL.hpp (GPL-2.0, LICENSE)
-copied by scripts/airport-vendor.sh, then qwzairport.patch applied
+Where airport/abi/ and airport/WCL.hpp come from
+
+Copied from laobamac/itlwm (GPL-2.0, LICENSE here), commit
+738d4c61b5a64433b27c1ab09dba94916ab77d8d: the Tahoe subset of include/Airport/ and
+AirportItlwm/WCL/WCL.hpp. Since then they are this project's files, edited in place;
+our changes are marked QWZAIRPORT or QWZMAC. apple80211_var.h, apple80211_ioctl.h and
+apple_private_spi.h are Apple's (APSL-2.0, headers kept).
+
+They are trusted only after `python3 scripts/kc-abi.py --check` and `--returns` pass on
+the running macOS build (docs/DEPENDENCIES.md).
+
+To compare with the fork (files we did not take show up as "Only in"):
+  git clone -q https://github.com/laobamac/itlwm /tmp/itlwm && git -C /tmp/itlwm checkout -q 738d4c6
+  diff -ru /tmp/itlwm/include/Airport airport/abi/Airport; diff -u /tmp/itlwm/AirportItlwm/WCL/WCL.hpp airport/WCL.hpp
