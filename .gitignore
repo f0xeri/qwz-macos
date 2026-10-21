@@ -8,3 +8,4 @@ config/wifi.plist
 /local/
 airport/QwzAirportStubs.inc
 CLAUDE.local.md
+dist/
