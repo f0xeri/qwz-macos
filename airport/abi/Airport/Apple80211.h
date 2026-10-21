@@ -9,10 +9,9 @@
 #ifndef Apple80211_h
 #define Apple80211_h
 
-/* QWZAIRPORT: unused debug.h and IO80211WorkLoop.h dropped; the latter brought in
- * <Availability.h>, which __IO80211_TARGET == __MAC_26_0 below needs. */
-#include <Availability.h>
 #include "apple_private_spi.h"
+#include "debug.h"
+#include "IO80211WorkLoop.h"
 #ifdef IO80211FAMILY_V2
 #include "IO80211WorkQueue.h"
 #include "IO80211ControllerV2.h"

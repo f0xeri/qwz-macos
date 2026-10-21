@@ -64,7 +64,8 @@ compared with **mnnobre/AirportMtkWlan** (GPL-2.0, commit `b880d9c`). `airport/W
 
 ### Apple headers in `airport/abi/` (APSL-2.0)
 `apple80211_ioctl.h`, `apple80211_var.h` and `apple_private_spi.h` are Apple header files under the
-Apple Public Source License 2.0 (header kept). They describe the interfaces of Apple's Wi-Fi family (structure layouts, constants) and are used only
+Apple Public Source License 2.0 (header kept), and `IO80211WorkLoop.h` carries an Apple copyright.
+They describe the interfaces of Apple's Wi-Fi family (structure layouts, constants) and are used only
 to talk to it. APSL-2.0 is not GPL-compatible in the FSF's view; these files are kept as interface
 descriptions under their own license, not relicensed.
 
