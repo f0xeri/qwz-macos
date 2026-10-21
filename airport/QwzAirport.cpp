@@ -102,11 +102,16 @@ QwzAirport::probe(IOService *provider, SInt32 *score)
 		    "kern.osversion failed" : "build not allowlisted");
 		ALOG("macOS build %s is not in QwzAirportBuilds (its IO80211 ABI was "
 		    "not checked with scripts/kc-abi.py --check): not starting", build);
+		provider->callPlatformFunction(QWZ_AIRPORT_UNAVAILABLE, false,
+		    (void *)"macOS build not allowlisted", nullptr, nullptr, nullptr);
 		return nullptr;
 	}
 	IOService *result = super::probe(provider, score);
 	provider->setProperty("QwzAirportProbeResult", result ? "accepted" : "super probe refused");
 	ALOG("probe: %s", result ? "accepted" : "super probe refused");
+	if (result == nullptr)
+		provider->callPlatformFunction(QWZ_AIRPORT_UNAVAILABLE, false,
+		    (void *)"native controller probe refused", nullptr, nullptr, nullptr);
 	return result;
 }
 
@@ -142,18 +147,12 @@ QwzAirport::stopAsync()
 		fConnected = false;
 	}
 	if (fRadioTc != nullptr) {
-		while (thread_call_isactive(fRadioTc)) {
-			thread_call_cancel(fRadioTc);
-			IOSleep(5);
-		}
+		qwz_airport_call_stop(fRadioTc);
 		thread_call_free(fRadioTc);
 		fRadioTc = nullptr;
 	}
 	if (fPowerTc != nullptr) {
-		while (thread_call_isactive(fPowerTc)) {
-			thread_call_cancel(fPowerTc);
-			IOSleep(5);
-		}
+		qwz_airport_call_stop(fPowerTc);
 		thread_call_free(fPowerTc);
 		fPowerTc = nullptr;
 	}
@@ -278,8 +277,19 @@ QwzAirport::releaseAll()
 	}
 }
 
+/* On failure QwzWifi falls back to Ethernet (kext/airport_api.h). */
 bool
 QwzAirport::start(IOService *provider)
+{
+	if (startController(provider))
+		return true;
+	provider->callPlatformFunction(QWZ_AIRPORT_UNAVAILABLE, false,
+	    (void *)"native controller did not start", nullptr, nullptr, nullptr);
+	return false;
+}
+
+bool
+QwzAirport::startController(IOService *provider)
 {
 	IOSkywalkEthernetInterface::RegistrationInfo reg;
 	const IONetworkMedium *medium;
@@ -510,7 +520,7 @@ int QwzAirport::park(void *cookie)
 	thread_call_t calls[] = {self->fPowerTc, self->fRadioTc};
 	for (auto call : calls) {
 		if (!call) continue;
-		while (thread_call_isactive(call)) { thread_call_cancel(call); IOSleep(5); }
+		qwz_airport_call_stop(call);
 	}
 	if (self->fNetIf) { self->fNetIf->stopJoins(); self->fNetIf->stopScans(); }
 	IOReturn result = self->fGate->runAction(parkGated);

@@ -30,6 +30,14 @@ extern "C" {
 #define QWZ_AIRPORT_API_VERSION	11
 #define QWZ_AIRPORT_CONNECT	"QwzAirportConnect"
 #define QWZ_AIRPORT_DISCONNECT	"QwzAirportDisconnect"
+/*
+ * Front side -> QwzWifi, callPlatformFunction(name, false, reason, 0, 0, 0):
+ * the native front will not run (macOS build not allowlisted, controller
+ * did not start). QwzWifi then publishes its Ethernet interface for
+ * HeliPort, as `qwzctl mode heliport` does. reason: const char *, logged.
+ * No structure changes, so no version bump.
+ */
+#define QWZ_AIRPORT_UNAVAILABLE	"QwzAirportUnavailable"
 
 /* Driver -> front events (qwz_airport_front.event). */
 enum {

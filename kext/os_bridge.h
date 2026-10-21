@@ -5,8 +5,21 @@
 #ifndef _QWZWIFI_OS_BRIDGE_H_
 #define _QWZWIFI_OS_BRIDGE_H_
 
+#include <IOKit/IOLib.h>
+#include <kern/thread_call.h>
+
 class IOService;
 class IOPCIDevice;
+
+/* Cancel tc and wait until no invocation of it runs, also one that re-arms itself. */
+static inline void
+qwzmac_thread_call_stop(thread_call_t tc)
+{
+	while (thread_call_isactive(tc)) {
+		thread_call_cancel(tc);
+		IOSleep(5);
+	}
+}
 
 bool	qwzmac_os_init(IOService *owner, IOPCIDevice *pci);
 void	qwzmac_os_fini(void);

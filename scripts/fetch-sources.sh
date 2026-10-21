@@ -1,13 +1,7 @@
 #!/bin/zsh
-# Prepares only build inputs. --imports fetches source for vendored ABI/WCL.
+# Fetches the build inputs pinned in config/sources.json (OpenBSD, firmware).
 set -e
 cd "${0:A:h}/.."
-usage=build
-case ${1:-} in
-  '') ;;
-  --imports) usage=import ;;
-  *) echo "usage: $0 [--imports]" >&2; exit 1 ;;
-esac
 clone() { # url dir commit [sparse paths...]
   local url=$1 dir=$2 rev=$3; shift 3
   if [[ -d $dir ]]; then
@@ -26,8 +20,7 @@ clone() { # url dir commit [sparse paths...]
   fi
   git -C $dir checkout -q $rev
 }
-# Only build sources are fetched by default; imports are explicit.
-for name in ${(f)"$(python3 scripts/sources.py list $usage)"}; do
+for name in ${(f)"$(python3 scripts/sources.py list)"}; do
   kind=$(python3 scripts/sources.py get sources.$name.kind)
   url=$(python3 scripts/sources.py get sources.$name.url)
   rev=$(python3 scripts/sources.py get sources.$name.revision)
@@ -45,7 +38,6 @@ for name in ${(f)"$(python3 scripts/sources.py list $usage)"}; do
     echo "unknown source kind: $kind" >&2; exit 1
   fi
 done
-[[ $usage == import ]] && exit 0
-python3 scripts/check-vendor.py --firmware-only
+python3 scripts/check-firmware.py
 [[ -d openbsd ]] && echo "skip openbsd/ (scripts/patches.sh check)" || scripts/patches.sh apply
 echo "done"

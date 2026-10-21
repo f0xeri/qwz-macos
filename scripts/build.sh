@@ -10,7 +10,7 @@ cd "${0:A:h}/.."
 SDK=$(xcrun --sdk macosx --show-sdk-path 2>/dev/null) || { echo "No Command Line Tools: run xcode-select --install"; exit 1; }
 KH="$SDK/System/Library/Frameworks/Kernel.framework/Headers"
 [[ -d "$KH" ]] || { echo "Kernel.framework headers not found in $SDK"; exit 1; }
-python3 scripts/check-vendor.py
+python3 scripts/check-firmware.py
 # Build only the declared OpenBSD files, with every local edit exported.
 [[ -d openbsd/.git ]] || { echo "openbsd/ missing: run scripts/patches.sh apply"; exit 1; }
 scripts/patches.sh check

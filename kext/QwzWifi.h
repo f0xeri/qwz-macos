@@ -105,6 +105,8 @@ private:
 	static int dvJoinStatus(void *, qwzmac_native_status *);
 	static int dvOutput(void *, const void *, size_t);
 	void publishEthernet();
+	static bool airportInstalled();
+	void nativeUnavailable(const char *why);
 
 	IOPCIDevice	*fPci;
 	void		*fQwz;

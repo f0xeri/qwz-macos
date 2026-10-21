@@ -34,6 +34,15 @@ static inline void qwz_airport_log(const char *format, ...)
 }
 #define ALOG(...) qwz_airport_log(__VA_ARGS__)
 
+/* Cancel tc and wait until no invocation of it runs, also one that re-arms itself. */
+static inline void qwz_airport_call_stop(thread_call_t tc)
+{
+	while (thread_call_isactive(tc)) {
+		thread_call_cancel(tc);
+		IOSleep(5);
+	}
+}
+
 class QwzAirportInterface;
 class QwzAirportEthernet;
 
@@ -102,6 +111,7 @@ public:
 	void macAddress(uint8_t mac[6]) const { memcpy(mac, fMac, sizeof(fMac)); }
 
 private:
+	bool startController(IOService *provider);
 	void trace(const char *stage);
 	void stopAsync();
 	static int park(void *);

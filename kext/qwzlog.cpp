@@ -210,10 +210,7 @@ qwzmac_log_stop(void)
 
 	if (gPublishTc != nullptr) {
 		/* The callback re-arms itself; cancel until it is quiet. */
-		while (thread_call_isactive(gPublishTc)) {
-			thread_call_cancel(gPublishTc);
-			IOSleep(5);
-		}
+		qwzmac_thread_call_stop(gPublishTc);
 		thread_call_free(gPublishTc);
 		gPublishTc = nullptr;
 	}

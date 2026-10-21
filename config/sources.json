@@ -2,27 +2,13 @@
   "sources": {
     "openbsd": {
       "kind": "git",
-      "usage": "build",
       "url": "https://github.com/openbsd/src.git",
       "revision": "9d744686b24f92bf6b45ab8178191c31ccb26da5",
       "directory": "third_party/openbsd",
       "manifest": "patches/openbsd/FILES"
     },
-    "laobamac": {
-      "kind": "git",
-      "usage": "import",
-      "url": "https://github.com/laobamac/itlwm.git",
-      "revision": "738d4c61b5a64433b27c1ab09dba94916ab77d8d",
-      "directory": "third_party/laobamac",
-      "paths": [
-        "/include/Airport/",
-        "/AirportItlwm/WCL/",
-        "/LICENSE"
-      ]
-    },
     "firmware": {
       "kind": "files",
-      "usage": "build",
       "url": "https://gitlab.com/kernel-firmware/linux-firmware/-/raw",
       "revision": "20260309",
       "directory": "firmware",

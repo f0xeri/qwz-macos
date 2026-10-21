@@ -212,7 +212,7 @@ LEA_RSI, LEA_RDX, MOV_RDX = b'\x48\x8d\x35', b'\x48\x8d\x15', b'\x48\x8b\x15'
 MOV_ECX, CALL, JMP = 0xb9, 0xe8, 0xe9
 
 
-def metaclass_hits(kcs, space, classes, verbose=False):
+def metaclass_hits(kcs, space, classes):
     """Every OSMetaClass registration of the given classes: each class's constructor calls
     OSMetaClass::OSMetaClass(this, "Name", &Super::gMetaClass, sizeof); on x86_64 that loads
     the name with `lea rsi,[rip+...]` and the size with `mov ecx,imm32`. Returns
@@ -221,10 +221,6 @@ def metaclass_hits(kcs, space, classes, verbose=False):
     nstr = {c: 0 for c in classes}
     for kc in kcs:
         m = kc.m
-        if verbose:
-            print('# %s' % kc.path)
-            for name, va, fo, fs, prot in kc.segs:
-                print('#   %-16s va 0x%x fileoff 0x%x size 0x%x prot %d' % (name, va, fo, fs, prot))
         # VA of each class name string ("\0Name\0"). Not only __TEXT: where the
         # strings and the code end up differs between collections, and the
         # protection bits of a collection's segments are not reliable.

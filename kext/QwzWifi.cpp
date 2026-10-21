@@ -26,6 +26,7 @@
  * SPDX-License-Identifier: GPL-2.0-only (qwz parts: ISC)
  */
 #include <IOKit/IOService.h>
+#include <IOKit/IOCatalogue.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOWorkLoop.h>
@@ -457,6 +458,41 @@ QwzWifi::netReady(void *cookie, const uint8_t mac[6])
 	}
 	// Publish only after firmware and the MAC are ready; the nub matches here.
 	me->registerService();
+	if (me->fNativePreferred && !airportInstalled())
+		me->nativeUnavailable("QwzAirport.kext not installed");
+}
+
+/* Whether QwzAirport's nub personality is in the IOCatalogue (kext loaded). */
+bool QwzWifi::airportInstalled()
+{
+	OSDictionary *match = OSDictionary::withCapacity(1);
+	OSString *cls = OSString::withCString("QwzAirportNub");
+	SInt32 generation = 0;
+	OSOrderedSet *found = nullptr;
+	if (match != nullptr && cls != nullptr && match->setObject(gIOClassKey, cls))
+		found = gIOCatalogue->findDrivers(match, &generation);
+	bool installed = found != nullptr && found->getCount() > 0;
+	OSSafeReleaseNULL(found);
+	OSSafeReleaseNULL(cls);
+	OSSafeReleaseNULL(match);
+	return installed;
+}
+
+/*
+ * The native front will not come: QwzAirport is not installed, refused this
+ * macOS build or did not start. Do what `qwzctl mode heliport` does, so the
+ * card is not left without any interface. A front that comes later is refused
+ * (fHeliportRequested).
+ */
+void QwzWifi::nativeUnavailable(const char *why)
+{
+	IOLockLock(fIfLock);
+	bool waiting = fNativePreferred && !fFrontOn && !fHeliportRequested && fNetIf == nullptr;
+	IOLockUnlock(fIfLock);
+	if (!waiting) return;
+	QLOG("native Wi-Fi front unavailable (%s): Ethernet for HeliPort", why ? why : "?");
+	setProperty("QwzFallback", why ? why : "native front unavailable");
+	(void)requestHeliportMode();
 }
 
 void QwzWifi::publishEthernet()
@@ -553,7 +589,7 @@ void QwzWifi::modeTc(thread_call_param_t p0, thread_call_param_t)
 		if (!attached) error = ENXIO;
 	}
 	me->setProperty("QwzModeSwitch", error ? "handover failed; native interface retained" : "HeliPort");
-	QLOG("manual HeliPort handover result %d (native interface retained)", error);
+	QLOG("HeliPort handover result %d", error);
 	me->clientExit();
 }
 
@@ -776,6 +812,10 @@ QwzWifi::callPlatformFunction(const OSSymbol *name, bool wait, void *p1,
 		    (qwz_airport_driver *)p2);
 	if (name != nullptr && name->isEqualTo(QWZ_AIRPORT_DISCONNECT))
 		return frontDisconnect(p1);
+	if (name != nullptr && name->isEqualTo(QWZ_AIRPORT_UNAVAILABLE)) {
+		nativeUnavailable((const char *)p1);
+		return kIOReturnSuccess;
+	}
 	return IOEthernetController::callPlatformFunction(name, wait, p1, p2,
 	    p3, p4);
 }
@@ -1037,16 +1077,13 @@ QwzWifi::stop(IOService *provider)
 	fNetIf = nullptr;
 	IOLockUnlock(fIfLock);
 	if (fModeTc) {
-		while (thread_call_isactive(fModeTc)) { thread_call_cancel(fModeTc); IOSleep(5); }
+		qwzmac_thread_call_stop(fModeTc);
 		thread_call_free(fModeTc);
 		fModeTc = nullptr;
 	}
 	/* linkTc() calls into qwz: wait for it (fStopping stops re-arming). */
 	if (fLinkTc != nullptr) {
-		while (thread_call_isactive(fLinkTc)) {
-			thread_call_cancel(fLinkTc);
-			IOSleep(5);
-		}
+		qwzmac_thread_call_stop(fLinkTc);
 	}
 	/*
 	 * QwzAirport is our client, so IOKit stopped it (and it disconnected)
@@ -1059,10 +1096,7 @@ QwzWifi::stop(IOService *provider)
 		IOLockSleep(fIfLock, &fFrontCalls, THREAD_UNINT);
 	IOLockUnlock(fIfLock);
 	if (fFrontTc != nullptr) {
-		while (thread_call_isactive(fFrontTc)) {
-			thread_call_cancel(fFrontTc);
-			IOSleep(5);
-		}
+		qwzmac_thread_call_stop(fFrontTc);
 		thread_call_free(fFrontTc);
 		fFrontTc = nullptr;
 	}

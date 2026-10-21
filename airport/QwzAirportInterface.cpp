@@ -575,10 +575,7 @@ void QwzAirportInterface::stopScans()
 	++fScanSerial;
 	IOLockUnlock(fScanLock);
 	if (fScanTc != nullptr) {
-		while (thread_call_isactive(fScanTc)) {
-			thread_call_cancel(fScanTc);
-			IOSleep(5);
-		}
+		qwz_airport_call_stop(fScanTc);
 		thread_call_free(fScanTc);
 		fScanTc = nullptr;
 	}
@@ -946,7 +943,7 @@ void QwzAirportInterface::stopJoins()
 	QwzJoin::wipe(&fJoinRequest, sizeof(fJoinRequest));
 	IOLockUnlock(fJoinLock);
 	if (fJoinTc) {
-		while (thread_call_isactive(fJoinTc)) { thread_call_cancel(fJoinTc); IOSleep(5); }
+		qwz_airport_call_stop(fJoinTc);
 		thread_call_free(fJoinTc); fJoinTc = nullptr;
 	}
 }
