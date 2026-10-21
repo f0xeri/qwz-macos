@@ -57,8 +57,11 @@ OpenCore, firmware WLAN.HMT.1.1.c5-00302 (linux-firmware `20260309`).
 
 Everything was tested on **macOS Tahoe (26.7.1)** only; macOS 27 does not run on Intel Macs.
 
-- **Native Wi-Fi mode (QwzAirport): Tahoe only**, and only on builds whose IO80211 ABI was checked
-  (today `25G241`).
+- **Native Wi-Fi mode (QwzAirport): Tahoe only.** It is expected to work on other Tahoe builds
+  too, but this has not been verified: it relies on Apple's undocumented IO80211 ABI, so it starts
+  only on builds listed in `QwzAirportBuilds` (today `25G241`). On any other build it stays off and
+  QwzWifi falls back to HeliPort mode. To check your own build, run `scripts/airport-check.sh check`;
+  if it passes, add the build to both lists in `airport/Info.plist` (see below).
 - **HeliPort mode (QwzWifi alone): expected to work on earlier macOS versions too.** HeliPort runs
   there, and QwzWifi implements the interface HeliPort talks to (`kext/heliport.h`); it is built for
   macOS 11 and newer. Only Tahoe has been tried so far, so reports from other versions are welcome.

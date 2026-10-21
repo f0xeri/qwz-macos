@@ -48,8 +48,9 @@ Back up your EFI first.
 - \`QwzWifi.kext\`: the driver. On its own it gives an Ethernet interface controlled by HeliPort or
   \`qwzctl\`; this mode is expected to work on earlier macOS versions too
   (HeliPort supports them; only Tahoe has been tried so far).
-- \`QwzAirport.kext\`: the native Wi-Fi front (Wi-Fi menu, System Settings). Only on macOS builds
-  listed in its allowlist (see README); skip it for HeliPort mode.
+- \`QwzAirport.kext\`: the native Wi-Fi front (Wi-Fi menu, System Settings). Expected to work on
+  other Tahoe builds too, but verified only on 25G241; it starts only on builds in its allowlist
+  (see README). Skip it for HeliPort mode.
 - \`qwzctl\`: command-line client.
 - \`LICENSE\` (GPL-2.0), \`NOTICE.md\`, \`AIRPORT-CREDITS.txt\`, and \`FIRMWARE-NOTICE.txt\` for the
   Qualcomm firmware embedded in \`QwzWifi.kext\`. Keep these files with any copy of the kexts.
