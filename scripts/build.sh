@@ -66,7 +66,7 @@ clang -Wall -Wextra -Werror -Wno-deprecated-declarations -fobjc-arc -O2 $ARCH \
   -framework Foundation -framework SystemConfiguration -framework IOKit \
   tools/qwz-network-services.m -o $OUT/qwz-network-services
 
-# QwzAirport.kext: the native Wi-Fi front (airport/, docs/native-wifi-research.md §8.5).
+# QwzAirport.kext: the native Wi-Fi front (airport/).
 # A separate kext so that QwzWifi.kext keeps to public KPIs: only this one links
 # IO80211Family, IOSkywalkFamily and corecapture, through airport/abi/ (checked against
 # the running build by scripts/kc-abi.py --check). No OpenBSD code in it.

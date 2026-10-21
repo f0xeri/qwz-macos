@@ -1,6 +1,6 @@
 QwzAirport.kext: credits and what comes from where
 
-QwzAirport is the native Wi-Fi front of QwzWifi (docs/native-wifi-research.md §8.5, §8.8).
+QwzAirport is the native Wi-Fi front of QwzWifi.
 It is GPL-2.0, like kext/. It starts from the native front of laobamac/itlwm, commit
 738d4c61b5a64433b27c1ab09dba94916ab77d8d (https://github.com/laobamac/itlwm, GPL-2.0),
 itself based on AirportItlwm by zxystd and the OpenIntelWireless contributors

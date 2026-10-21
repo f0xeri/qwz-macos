@@ -1,6 +1,6 @@
 /*
  * QwzWifi <-> QwzAirport: the seam between the driver kext and the native
- * Wi-Fi front (airport/, docs/native-wifi-research.md §8.5).
+ * Wi-Fi front (airport/).
  *
  * The two kexts do not link against each other. QwzAirport matches on the
  * QwzWifi service and calls
