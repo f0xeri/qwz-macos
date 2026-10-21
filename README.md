@@ -17,7 +17,7 @@ so it is expected to work on the older macOS versions HeliPort supports too (see
 | Kext | What it is | Runs on |
 |---|---|---|
 | `QwzWifi.kext` | The driver: OpenBSD qwz(4) + net80211, firmware, DMA, interrupts. Without the native front it appears as an Ethernet interface ("Qualcomm Wi-Fi") controlled by [HeliPort](https://github.com/OpenIntelWireless/HeliPort) or `qwzctl`. | x86_64. Tested on macOS Tahoe (26.7.1); HeliPort mode is expected to work on earlier versions as well, see [macOS versions](#macos-versions) |
-| `QwzAirport.kext` | The native Wi-Fi front: the card appears in the Wi-Fi menu and System Settings as Wi-Fi. No hardware access; it talks to QwzWifi through a small C interface (`kext/airport_api.h`). | macOS 26.7.1 build **25G241** only |
+| `QwzAirport.kext` | The native Wi-Fi front: the card appears in the Wi-Fi menu and System Settings as Wi-Fi. No hardware access; it talks to QwzWifi through a small C interface (`kext/airport_api.h`). | macOS Tahoe: works on build **25G241**; other Tahoe builds expected to work but not verified, see [macOS versions](#macos-versions) |
 
 ## What works
 
@@ -43,7 +43,7 @@ OpenCore, firmware WLAN.HMT.1.1.c5-00302 (linux-firmware `20260309`).
   the switch is not ported from qwx(4)).
 - Latency spikes (up to ~165 ms) while a scan is running; macOS asks for scans often in native mode.
 - Joining takes ~4–6 s (full scan of all channels first).
-- Native mode only on the one macOS build whose IO80211 ABI was checked (25G241). On any other build,
+- Native mode starts only on macOS builds whose IO80211 ABI was checked (today 25G241; others are expected to work but are not verified). On any other build,
   without `QwzAirport.kext`, or when it fails to start, QwzWifi falls back by itself to its Ethernet
   interface for HeliPort (the `QwzFallback` property of the PCI device says why). To use HeliPort
   while native mode works: `sudo build/qwzctl mode heliport`, or set `QwzNativeData` to false in
