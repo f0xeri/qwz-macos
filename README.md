@@ -38,9 +38,11 @@ OpenCore, firmware WLAN.HMT.1.1.c5-00302 (linux-firmware `20260309`).
   the switch is not ported from qwx(4)).
 - Latency spikes (up to ~165 ms) while a scan is running; macOS asks for scans often in native mode.
 - Joining takes ~4–6 s (full scan of all channels first).
-- Native mode only on the one macOS build whose IO80211 ABI was checked (25G241). On any other build
-  QwzAirport does not start; QwzWifi then waits for it, and you switch to HeliPort mode by hand:
-  `sudo build/qwzctl mode heliport` (or set `QwzNativeData` to false in QwzWifi's Info.plist).
+- Native mode only on the one macOS build whose IO80211 ABI was checked (25G241). On any other build,
+  without `QwzAirport.kext`, or when it fails to start, QwzWifi falls back by itself to its Ethernet
+  interface for HeliPort (the `QwzFallback` property of the PCI device says why). To use HeliPort
+  while native mode works: `sudo build/qwzctl mode heliport`, or set `QwzNativeData` to false in
+  QwzWifi's Info.plist.
 - OpenCore injection only: both kexts use one kernel function (`thread_call_isactive`) that is not in
   a public KPI set, so `kmutil load` cannot link them.
 - With `config/wifi.plist` the network password is stored in plain text inside the kext on the EFI

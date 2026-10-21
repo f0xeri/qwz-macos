@@ -25,6 +25,7 @@ private:
 	static void readyTc(thread_call_param_t, thread_call_param_t);
 	void cancelReady();
 	void status(const char *text);
+	static void unavailable(IOService *qwz, const char *why);
 	IOService *fQwz;
 	IO80211WorkQueue *fWorkQueue;
 	thread_call_t fReadyTc;

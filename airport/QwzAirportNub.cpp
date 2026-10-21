@@ -27,14 +27,25 @@ void QwzAirportNub::status(const char *text)
 	ALOG("readiness: %s", text);
 }
 
+// No native controller will be published: QwzWifi falls back to Ethernet.
+void QwzAirportNub::unavailable(IOService *qwz, const char *why)
+{
+	ALOG("native front unavailable: %s", why);
+	qwz->callPlatformFunction(QWZ_AIRPORT_UNAVAILABLE, false, (void *)why,
+	    nullptr, nullptr, nullptr);
+}
+
 bool QwzAirportNub::start(IOService *provider)
 {
-	if (!super::start(provider))
+	if (!super::start(provider)) {
+		unavailable(provider, "nub did not start");
 		return false;
+	}
 	fQwz = provider;
 	fWorkQueue = IO80211WorkQueue::workQueue();
 	if (fWorkQueue == nullptr) {
 		super::stop(provider);
+		unavailable(provider, "no IO80211 work queue");
 		return false;
 	}
 	// ONCE prevents overlap if registerService causes further work to run.
@@ -43,6 +54,7 @@ bool QwzAirportNub::start(IOService *provider)
 	if (fReadyTc == nullptr) {
 		OSSafeReleaseNULL(fWorkQueue);
 		super::stop(provider);
+		unavailable(provider, "nub did not start");
 		return false;
 	}
 	status("waiting asynchronously for kern.osversion");
@@ -65,6 +77,7 @@ void QwzAirportNub::readyTc(thread_call_param_t p0, thread_call_param_t)
 	if (error != 0 || build[0] == '\0') {
 		if (self->fAttempts >= 120) {
 			self->status("build unavailable after 120 polls; native controller not published");
+			unavailable(self->fQwz, "macOS build unknown");
 			return;
 		}
 		uint64_t deadline;
@@ -84,6 +97,7 @@ void QwzAirportNub::readyTc(thread_call_param_t p0, thread_call_param_t)
 	}
 	if (!allowed) {
 		self->status("build not allowlisted; native controller not published");
+		unavailable(self->fQwz, "macOS build not allowlisted");
 		return;
 	}
 	if (__atomic_load_n(&self->fStopping, __ATOMIC_SEQ_CST))
@@ -96,7 +110,8 @@ IOReturn QwzAirportNub::callPlatformFunction(const OSSymbol *name, bool wait,
     void *p1, void *p2, void *p3, void *p4)
 {
 	if (name != nullptr && (name->isEqualTo(QWZ_AIRPORT_CONNECT) ||
-	    name->isEqualTo(QWZ_AIRPORT_DISCONNECT))) {
+	    name->isEqualTo(QWZ_AIRPORT_DISCONNECT) ||
+	    name->isEqualTo(QWZ_AIRPORT_UNAVAILABLE))) {
 		if (fQwz == nullptr)
 			return kIOReturnNotReady;
 		return fQwz->callPlatformFunction(name, wait, p1, p2, p3, p4);

@@ -112,6 +112,7 @@ public:
 	void macAddress(uint8_t mac[6]) const { memcpy(mac, fMac, sizeof(fMac)); }
 
 private:
+	bool startController(IOService *provider);
 	void trace(const char *stage);
 	void stopAsync();
 	static int park(void *);
