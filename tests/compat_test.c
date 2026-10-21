@@ -283,15 +283,16 @@ test_task(void)
 {
 	struct taskq *tq;
 	struct task t1, t2;
-	int s, i;
+	int s, i, r = 0;
 
 	CHECK(qwzmac_taskq_init() == 0);
 	task_set(&t1, task_fn, NULL);
 	task_ran = 0;
 	CHECK(task_add(systq, &t1) == 1);
 	s = splnet();
-	while (task_ran == 0)
-		CHECK(tsleep_nsec(&task_ran, 0, "t", SEC_TO_NSEC(2)) == 0);
+	while (task_ran == 0 && r == 0)
+		r = tsleep_nsec(&task_ran, 0, "t", SEC_TO_NSEC(2));
+	CHECK(r == 0);	/* exactly one check, whether or not the task had already run */
 	splx(s);
 	CHECK(task_ran == 1);
 
