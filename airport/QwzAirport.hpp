@@ -51,7 +51,7 @@ static inline void qwz_airport_call_stop(thread_call_t tc)
 	}
 }
 
-#define QWZ_AIRPORT_VERSION	"0.3.7"
+#define QWZ_AIRPORT_VERSION	"0.3.12"	/* = CFBundleVersion in airport/Info.plist */
 
 class QwzAirportInterface;
 class QwzAirportEthernet;
