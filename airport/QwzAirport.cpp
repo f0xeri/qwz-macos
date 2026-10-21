@@ -322,13 +322,9 @@ QwzAirport::startController(IOService *provider)
 		releaseAll();
 		return false;
 	}
-	/* QWZMAC: C2 keeps QwzWifi's real en interface alive. A second
-	 * interface with its MAC is assigned the same persisted en unit by
-	 * configd (en4 here), and naming fails with kIOReturnNoSpace. Give
-	 * this control-only front a distinct locally administered unicast
-	 * identity. No firmware/vdev MAC is changed; replace this arrangement
-	 * when C4 transfers ownership of the real data interface.
-	 */
+	/* In control-only mode, a second interface with the hardware MAC would
+	 * collide with QwzWifi's persisted en unit. Give this endpoint a local
+	 * unicast MAC; the on-air address stays unchanged. */
 	if (!fNativeData) {
 		fMac[0] = (fMac[0] | 0x02) & 0xfe;
 		fMac[5] ^= 0x01;
@@ -767,7 +763,7 @@ QwzAirport::selectMedium(const IONetworkMedium *medium)
 	return kIOReturnSuccess;
 }
 
-/* The native BSD interface is the only IP data path in C4 mode. */
+/* Native mode sends IP traffic through the BSD interface. */
 UInt32
 QwzAirport::outputPacket(mbuf_t packet, void *)
 {
@@ -971,10 +967,8 @@ QwzAirport::setPOWER(IO80211SkywalkInterface *, apple80211_power_data *pd)
 	return kIOReturnSuccess;
 }
 
-/*
- * The country of the firmware's regulatory domain, only reported
- * (CLAUDE.md: no regulatory changes): "ZZ" until the firmware sent one.
- */
+/* Report the firmware's regulatory country, or "ZZ" before it arrives.
+ * This getter never changes the regulatory domain. */
 IOReturn
 QwzAirport::getCOUNTRY_CODE(IO80211SkywalkInterface *, apple80211_country_code_data *cd)
 {

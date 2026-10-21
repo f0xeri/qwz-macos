@@ -1,48 +1,26 @@
 #!/usr/bin/env python3
-"""Dump the C++ ABI of IOKit classes from this Mac's kernel collections: super class and
-vtable slots (what each slot points to, demangled), as a text file the header generator reads.
+"""Inspect IOKit C++ ABI in this Mac's kernel collections; read-only, no root.
 
-usage: scripts/kc-abi.py [-o FILE] CLASS ...
-       scripts/kc-abi.py --check [CLASS ...]   (default: the classes QwzAirport subclasses)
-       scripts/kc-abi.py --returns [CLASS ...] (default: IO80211InfraProtocol, IO80211Controller)
+Usage: scripts/kc-abi.py [-o FILE] CLASS ...
+       scripts/kc-abi.py --check [CLASS ...]
+       scripts/kc-abi.py --returns [CLASS ...]
 
-Read-only, needs no root. Native Wi-Fi (docs/native-wifi-research.md §8) subclasses Apple's
-IO80211/Skywalk classes, which have no public headers. Our headers (airport/abi/) are generated
-from this dump, so a slot can only be where this macOS build has it.
+The dump lists superclasses and vtable slots, resolving chained pointers and
+mangled symbols. Pure-slot signatures come from a concrete Apple subclass.
+Slot kinds: new, over (override), inh (inherited), pure.
 
-How: the vtable of class C is the symbol __ZTV<C>; its slots start 16 bytes in (offset to top,
-RTTI). Each slot is a chained pointer to the method's code; the symbol there names it
-(mangled names carry the argument types, not the return type). The super class comes from
-C::superClass, a pointer to Super::gMetaClass. A slot whose code is __cxa_pure_virtual is pure:
-a subclass must implement it. Its name and argument types are taken from the first subclass in
-the collections (usually Apple's own driver, AppleBCMWLAN*) whose vtable has a real method there.
+--check compares airport/abi/ with the running macOS: slot count, signatures,
+pure virtuals and class size. It compiles probe subclasses with Tahoe defines.
+Reserved pads and methods implemented only in the kernel are allowed.
+Default: classes subclassed by QwzAirport. Exit 1 on a mismatch; run before
+adding a macOS build to QwzAirportBuilds.
 
-Output, one block per class:
-  class C : Super  slots N (super M)  bundle com.apple...
-  <index> <kind> <mangled name or 0xADDRESS> | <demangled>
-kind: new (first appears in C), over (C overrides the super class's slot), inh (inherited),
-pure (pure virtual in C; the name after '|' is the subclass's method, '= Sub::name(...)').
-
---check compares our headers (airport/abi/, built with the Tahoe defines) with this Mac: for
-each class it compiles a probe subclass, reads the probe's vtable from the object file (each
-slot's relocation names the method, mangled, so argument types are compared exactly), the
-header's names of pure slots from clang's -fdump-vtable-layouts, and sizeof(class). Errors:
-a different slot count (our own virtuals would land on Apple's slots), a different size (our
-fields would overlap Apple's), a slot whose method differs, a slot the header implements but
-the Mac leaves pure. Not errors: a slot the header names _RESERVED... where the Mac has a real
-method (the kernel's linker patches a subclass's reserved pads from the parent's vtable), and a
-slot pure in the header but implemented on the Mac (we only have to implement it). Exit status 1 on any error. Run it before adding a build to QwzAirport's
-allowlist.
-
---returns checks what our generated stubs (scripts/airport-stubs.py) assume: that every pure
-virtual request returns an int-sized IOReturn. Mangled names carry no return type, so it looks
-at Apple's own implementation of each pure slot (in AppleBCMWLAN*) and at what it leaves in
-eax/al/rax before `ret`, following tail calls and the forwarders that call the same-named
-method of AppleBCMWLANCore through its vtable. A slot that returns through `al` (bool) or a
-pointer while airport/abi declares an int (or the other way round) is listed: a
-kIOReturnUnsupported stub would read as "true" or as a pointer there. 'call' means the value
-comes from another call (not followed), 'unknown' that no return was recognized; neither is an
-error. Exit status 1 on any mismatch."""
+--returns checks request return types against Apple's machine code, because
+C++ symbols encode arguments but not return types. A bool or pointer cannot
+safely use an IOReturn Unsupported stub. Tail calls and controller forwarders
+are followed; unresolved calls and unknown returns are reported without
+failing. Default: IO80211InfraProtocol and IO80211Controller. Exit 1 on a mismatch.
+"""
 import os, re, struct, subprocess, sys, tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

@@ -483,7 +483,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  	if (arg) {
  		free(arg->chan_list, M_DEVBUF,
  		    arg->num_chan * sizeof(*arg->chan_list));
-@@ -24287,6 +24556,71 @@ qwz_scan_abort(struct qwz_softc *sc)
+@@ -24287,6 +24556,66 @@ qwz_scan_abort(struct qwz_softc *sc)
  #endif
  }
  
@@ -521,13 +521,8 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
 +	return 0;
 +}
 +
-+/*
-+ * QWZMAC: the scan found a better AP. qwx(4) roams to it
-+ * (qwx_bgscan_done_task(): drain the Tx queues, delete the keys, tear the
-+ * old association down in firmware, ieee80211_node_switch_bss()); that is
-+ * not ported yet, so stay with the current AP, as net80211 does when the
-+ * scan picks the same AP again (ieee80211_end_scan()).
-+ */
++/* QWZMAC: stay on the current AP. Roaming requires firmware queue/key
++ * teardown before ieee80211_node_switch_bss(), which this port lacks. */
 +void
 +qwz_bgscan_done(struct ieee80211com *ic,
 +    struct ieee80211_node_switch_bss_arg *arg, size_t arg_size)
@@ -555,7 +550,7 @@ diff --git a/sys/dev/ic/qwz.c b/sys/dev/ic/qwz.c
  /*
   * Find a pdev which corresponds to a given channel.
   * This doesn't exactly match the semantics of the Linux driver
-@@ -25072,6 +25406,9 @@ qwz_attach(struct qwz_softc *sc)
+@@ -25072,6 +25401,9 @@ qwz_attach(struct qwz_softc *sc)
  	task_set(&sc->newstate_task, qwz_newstate_task, sc);
  	task_set(&sc->setkey_task, qwz_setkey_task, sc);
  	task_set(&sc->ba_task, qwz_ba_task, sc);

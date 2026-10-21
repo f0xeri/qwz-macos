@@ -169,7 +169,7 @@ int qwzmac_qwz_scan_snapshot(void *dev, uint32_t ticket, struct qwzmac_scan_bss 
  * claiming scan completion. No observations from queued or failed tickets. */
 int qwzmac_qwz_scan_progress(void *dev, uint32_t ticket, struct qwzmac_scan_bss *out, int max);
 
-/* C4: PMK is already derived by macOS; never treat it as a password. */
+/* macOS supplies a derived PMK; never treat it as a password. */
 struct qwzmac_native_join {
 	uint8_t ssid[32], ssid_len, bssid[6], secured;
 	uint8_t pmk[32];

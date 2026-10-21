@@ -1,6 +1,5 @@
 /*
- * QwzWifi compat: OpenBSD mutex(9). Mutexes map to the global spl lock;
- * at this stage nothing needs finer locking.
+ * QwzWifi compat: OpenBSD mutex(9), backed by the global recursive spl lock.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #ifndef _QWZMAC_SYS_MUTEX_H_

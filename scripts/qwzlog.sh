@@ -17,11 +17,11 @@ print -r -- "$log" > "$out"
 echo "saved $(wc -l < "$out" | tr -d ' ') lines to $out"
 echo "--- summary ---"
 grep -E 'stage [123]|bring-up took|Asserted|fatal firmware|MAC address|timeout|failed|PANIC|refused|joined|network interface|link (up|down)|interface (enabled|disabled)|system (sleep|wake)|sleep: |wake: |power message' "$out" | cut -c1-160 | head -60
-# Stage 3: association (net80211 state changes) and the WPA2 4-way handshake.
+# Association state changes and the WPA2 handshake.
 echo "--- association ---"
 grep -E 'qwz0: [A-Z]+ -> [A-Z]+|handshake|authentication failed|association failed|deauth|disassoc|with .* ssid|no beacons' "$out" |
   grep -v 'SCAN -> SCAN' | cut -c1-160 | head -30
-# Stage 2: net80211 lists every network after each scan (IFF_DEBUG):
+# IFF_DEBUG lists every network after each scan:
 #   qwz0: - <bssid>! <chan> <rssi> <rate> ess <privacy> <rsn> <ssid>
 # '!' marks why it was not joined (the scan-only bssid filter fails all).
 # ni_rssi is a u_int8_t, so -71 dBm prints as +185: convert back.

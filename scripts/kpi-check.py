@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
-"""Check that a kext links the way `kmutil load` links it: every undefined symbol must come from
-a library in its OSBundleLibraries, either a KPI symbol set of the kernel or the exports of a
-kext. Lists what does not resolve, and anything taken from com.apple.kpi.private.
+"""Check undefined kext symbols against OSBundleLibraries and kernel exports.
+Reports unresolved symbols and any use of com.apple.kpi.private.
 
-usage: scripts/kpi-check.py [--opencore] build/QwzWifi.kext [build/QwzAirport.kext ...]
+Usage: scripts/kpi-check.py [--opencore] build/QwzWifi.kext [build/QwzAirport.kext ...]
+Read-only; no root required.
 
---opencore: explicitly allow _thread_call_isactive in our two bundles only.
-The user chose native xnu calls for OpenCore injection; kmutil load cannot link it.
-
-Read-only, no root. Why not `kmutil libraries -p X.kext --undef-symbols`: it silently leaves
-out symbols it cannot place (thread_call_isactive, exported by no KPI set, passed it). OpenCore's
-linker resolves against the whole kernel symbol table, so such a symbol works when the kext is
-injected at boot and fails only with kmutil load. The KPI sets are the kernel's
-__LINKINFO,__symbolsets plist; a kext's exports are the external symbols of its fileset entry in
-the boot/system kernel collections."""
+--opencore allows only _thread_call_isactive in our two bundles. OpenCore
+resolves it through the kernel symbol table; kmutil cannot link it through KPIs.
+Checks use __LINKINFO,__symbolsets and kernel-collection kext exports;
+kmutil libraries alone can silently omit unresolved symbols.
+"""
 import os, plistlib, struct, subprocess, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

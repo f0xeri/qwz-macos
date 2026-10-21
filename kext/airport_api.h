@@ -35,7 +35,6 @@ extern "C" {
  * the native front will not run (macOS build not allowlisted, controller
  * did not start). QwzWifi then publishes its Ethernet interface for
  * HeliPort, as `qwzctl mode heliport` does. reason: const char *, logged.
- * No structure changes, so no version bump.
  */
 #define QWZ_AIRPORT_UNAVAILABLE	"QwzAirportUnavailable"
 

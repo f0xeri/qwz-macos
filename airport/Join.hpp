@@ -18,7 +18,7 @@ inline bool translate(const AirportWCL::JoinRequest &in, qwzmac_native_join &out
     if (!open && !personal) return false;
     if (personal && in.rsnLength && (in.rsnLength < 8 || in.rsn[0] != 48 ||
         in.rsn[4] != 0 || in.rsn[5] != 15 || in.rsn[6] != 172 || in.rsn[7] != 4))
-        return false; // first path: WPA2-PSK CCMP, no TKIP/SAE/enterprise downgrade
+        return false; // Accept WPA2-PSK CCMP; never downgrade TKIP, SAE or enterprise.
     uint8_t any = 0;
     for (auto byte : in.bssid) any |= byte;
     if (!any || (in.bssid[0] & 1)) return false;

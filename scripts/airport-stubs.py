@@ -1,15 +1,10 @@
 #!/usr/bin/env python3
-"""Generate airport/QwzAirportStubs.inc: an override returning kIOReturnUnsupported for every
-pure virtual method of IO80211InfraProtocol (and its base classes) that airport/
-QwzAirportInterface.hpp does not implement itself.
+"""Generate Unsupported overrides for unimplemented native Wi-Fi requests.
 
-usage: scripts/airport-stubs.py        (scripts/build.sh runs it)
-
-IO80211InfraProtocol leaves ~200 Wi-Fi requests pure virtual; a driver must answer all of
-them. Writing 200 identical stubs by hand is how slots and signatures drift; this takes the
-signatures from airport/abi/ (checked against the running macOS by scripts/kc-abi.py --check)
-so a stub always overrides exactly the slot the header declares. A request we implement goes
-into QwzAirportInterface.hpp and drops out of the generated file on the next build."""
+Usage: scripts/airport-stubs.py (also run by build.sh).
+Signatures come from airport/abi/. Methods implemented in
+QwzAirportInterface.hpp are excluded. Verify the headers with kc-abi.py --check.
+"""
 import os, re, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

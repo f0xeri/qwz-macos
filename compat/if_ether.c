@@ -1,10 +1,8 @@
 /*
  * QwzWifi compat: the part of OpenBSD if_ethersubr.c that net80211 uses.
  *
- * There is no OpenBSD network stack here. In stage 3 the kext glue hands
- * complete Ethernet frames to if_enqueue() and takes received ones from
- * if_input(), so ether_output() (IP packet + route -> frame) is never on
- * the data path.
+ * The kext exchanges complete Ethernet frames through if_enqueue() and
+ * if_input(). There is no OpenBSD IP stack or ether_output() data path.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include <sys/param.h>

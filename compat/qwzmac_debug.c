@@ -1,10 +1,6 @@
 /*
- * QwzWifi: debugging helpers for the bring-up.
- *
- * qwzmac_rddm_report(): after a firmware crash the device writes a RAM
- * dump (RDDM) into host memory. Instead of saving it to a file (which qwz
- * does on OpenBSD) we log the printable strings found in it. The crash
- * reason and source file usually show up among the first ones.
+ * QwzWifi firmware crash diagnostics. qwzmac_rddm_report() logs printable
+ * strings from the device's RAM dump (RDDM), including crash reasons.
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */

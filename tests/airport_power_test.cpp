@@ -106,7 +106,7 @@ int main()
     recovery.cancel();
     assert(!recovery.acknowledge() && !recovery.take());
     recovery.arm();
-    assert(!recovery.take()); // ready queued, SSM still DEFER (0.3.10 bug)
+    assert(!recovery.take()); // ready queued; WCL has not processed it
     assert(recovery.acknowledge()); // process queued FW_LOADED
     assert(!recovery.acknowledge()); // duplicate callback
     assert(recovery.take() && !recovery.take());

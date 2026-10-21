@@ -1,20 +1,15 @@
 /*
  * QwzWifi — Qualcomm WCN7850 (17cb:1107) driver for macOS, port of OpenBSD qwz(4).
  *
- * Stage 1: run qwz's attach unchanged (adapter/device.c) up to "firmware
- * ready" and the MAC address.
- * Stage 2: bring the interface up; net80211 logs the networks it finds.
- * Stage 3: join the configured network (WPA2-PSK) and appear to macOS as
- * an Ethernet interface (itlwm style): Ethernet frames are copied between
- * macOS mbufs and OpenBSD mbufs in adapter/device.c.
- * Stage 4: sleep/wake, packet counters, the link speed follows the TX rate.
- * HeliPort (itlwm's menu app) can pick the network: kext/QwzUserClient.cpp.
+ * Runs firmware, scans, joins and sleep/wake through adapter/. Ethernet
+ * frames are copied between macOS and OpenBSD mbufs. HeliPort controls
+ * Wi-Fi through QwzUserClient; link speed follows the firmware's TX rate.
  * Native Wi-Fi: the separate QwzAirport.kext (airport/) connects through
  * callPlatformFunction() and kext/airport_api.h.
  *
  * Boot-args:
  *   -qwzon     required, otherwise the driver does not attach at all
- *   -qwzprobe  stage 0 only: log IDs/BAR/MSI and leave the device untouched
+ *   -qwzprobe  read-only diagnostics: log IDs/BAR/MSI, do not start the chip
  *   qwzdebug=N qwz debug mask (QWZ_D_* in qwzvar.h), default 0 (errors only).
  *              0x7 = MISC|MHI|QMI; slows bring-up, qwz's 1 s QMI timeouts may fire
  *
@@ -70,7 +65,7 @@ QwzWifi::probe(IOService *provider, SInt32 *score)
 	return IOEthernetController::probe(provider, score);
 }
 
-/* Stage 0 diagnostics: config space reads only. */
+/* PCI diagnostics: config space reads only. */
 void
 QwzWifi::logDevice(IOPCIDevice *pci)
 {

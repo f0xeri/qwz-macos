@@ -7,15 +7,7 @@
 /* qwz stores the signal as a signed dBm value in net80211's u_int8_t. */
 #define QWZMAC_RSSI_DBM(ni)	((int)(int8_t)(ni)->ni_rssi)
 
-/*
- * The current TX rate in bit/s, or 0 when not associated. TX completions
- * carry the rate the firmware used (qwz_dp_tx_complete_msdu() stores it in
- * ni_txmcs / ni_txrate). For HT that is only the per-stream MCS (0-7), not
- * the stream count, width or guard interval, so those are taken as
- * negotiated: the streams both sides support (as qwz_peer_assoc_h_ht()
- * counts them), 40 MHz as qwz sets up the peer, and short GI if both have it.
- */
-/* 40 MHz as qwz sets the peer up (qwz_peer_assoc_h_phymode()). */
+/* Match the 40 MHz peer setup in qwz_peer_assoc_h_phymode(). */
 static int
 qwzmac_chan40(struct ieee80211_node *ni)
 {
@@ -59,14 +51,8 @@ qwzmac_ni_tx_rate(struct ieee80211com *ic, struct ieee80211_node *ni,
 	return 0;
 }
 
-/*
- * The current TX rate in bit/s, or 0 when not associated. TX completions
- * carry the rate the firmware used (qwz_dp_tx_complete_msdu() stores it in
- * ni_txmcs / ni_txrate). For HT that is only the per-stream MCS (0-7), not
- * the stream count, width or guard interval, so those are taken as
- * negotiated: the streams both sides support (as qwz_peer_assoc_h_ht()
- * counts them), 40 MHz as qwz sets up the peer, and short GI if both have it.
- */
+/* TX rate in bit/s, or 0 when disconnected. Firmware supplies the MCS;
+ * HT stream count, width and guard interval come from negotiated settings. */
 uint64_t
 qwzmac_qwz_tx_rate(void *p)
 {

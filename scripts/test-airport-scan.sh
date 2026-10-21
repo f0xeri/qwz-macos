@@ -12,7 +12,7 @@ clang++ -std=c++14 -pthread -g -fsanitize=address,undefined tests/airport_power_
     -o build/test/airport_power_test
 build/test/airport_power_test
 
-# C4: native association bounds, PMK handling and real success prerequisites.
+# Native join bounds, PMK handling and association completion.
 clang++ -std=c++14 -g -fsanitize=address,undefined tests/airport_join_test.cpp \
     -o build/test/airport_join_test
 build/test/airport_join_test

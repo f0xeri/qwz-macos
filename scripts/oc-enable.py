@@ -3,7 +3,7 @@
 usage: oc-enable.py on|probe|off|airport-on|airport-off [path/to/EFI/OC]
        (default path: the one in local/oc-dir)
   on           kext enabled, boot-arg -qwzon            (normal run)
-  probe        kext enabled, boot-args -qwzon -qwzprobe (stage 0: read-only probe)
+  probe        kext enabled, boot-args -qwzon -qwzprobe (read-only probe)
   off          kext disabled, no QwzWifi boot-args
   airport-on   QwzAirport.kext (native Wi-Fi front) enabled, right after QwzWifi, kernels
                25.x only (Tahoe; it also refuses macOS builds not in its QwzAirportBuilds).

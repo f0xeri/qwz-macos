@@ -117,15 +117,10 @@ IOReturn
 QwzAirportInterface::setINFRA_ENUMERATED(apple80211_infra_enumerated *data)
 {
 	if (data == nullptr) return kIOReturnBadArgument;
-	/* QWZMAC: airportd opens its IOUC event pipe after BSD attachment.
-	 * The initial ready event can precede that subscription; airportd then
-	 * rejects every auto-join as "driver not available". Enumeration
-	 * follows event registration. Replay the actual ready snapshot to
-	 * user space only, without feeding WCL another reset/ready cycle or
-	 * rotating the MAC. A real later radio transition still goes through
-	 * the ordinary WCL lifecycle. AppleBCMWLAN's handler accepts this
-	 * non-null request; the pinned third-party handlers leave it unused.
-	 */
+	/* QWZMAC: airportd can subscribe after the initial ready event. Replay
+	 * current availability after enumeration so auto-join sees it. Send
+	 * only to user space: another WCL reset/ready would rotate the MAC.
+	 * The diagnostic property records a send attempt, not delivery. */
 	if (fRadioLifecycle.available && !fRadioLifecycle.resetPending) {
 		AirportWCL::DriverAvailability ev = {};
 		ev.version = 3;

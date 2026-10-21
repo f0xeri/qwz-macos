@@ -120,20 +120,14 @@ extern int cold;
 
 static inline int abs(int j) { return j < 0 ? -j : j; }
 
-/*
- * There are no OpenBSD processes. net80211's ioctl path checks
- * suser(curproc); every ioctl comes from our own kext (later from its user
- * client, which does its own privilege check).
- */
+/* net80211 ioctls run inside the kext, without OpenBSD processes.
+ * The macOS user client checks access before calling this layer. */
 struct proc;
 #define curproc		((struct proc *)0)
 static inline int suser(struct proc *p) { (void)p; return 0; }
 
-/*
- * QWZMAC: ioctl argument copies. Every ifnet ioctl is issued by the kext
- * itself with kernel buffers, so these are plain copies. A future user
- * client must copy user data in itself before calling ifp->if_ioctl.
- */
+/* QWZMAC: ifnet ioctls receive kernel buffers. User clients must copy and
+ * validate user data before calling this layer. */
 static inline int
 copyin(const void *uaddr, void *kaddr, size_t len)
 {

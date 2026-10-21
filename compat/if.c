@@ -1,7 +1,6 @@
 /*
  * QwzWifi compat: the small part of if(9)/ifq(9) a driver touches.
- * In stage 3 if_input()/link state are forwarded to the IOEthernetController
- * through the if_qwzmac_* hooks in struct ifnet.
+ * Frames and link state reach the kext through if_qwzmac_* hooks in ifnet.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include <sys/param.h>

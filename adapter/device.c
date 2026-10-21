@@ -94,14 +94,9 @@ qwzmac_if_beacon(struct ifnet *ifp)
 	if (qd->ops.beacon != NULL) qd->ops.beacon(qd->ops.cookie);
 }
 
-/*
- * After stage 1: configure the network and bring the interface up, like
- * ifconfig would. IFF_DEBUG makes net80211 log the scan results, the
- * association and the 4-way handshake.
- * Without a network this is stage 2, scan only: a desired BSSID no AP has
- * makes every candidate fail, so net80211 keeps rescanning and joins
- * nothing. Called from the bring-up thread without the spl lock.
- */
+/* Configure and start the interface from the bring-up thread, without spl.
+ * IFF_DEBUG logs scans, association and the handshake. With no network set,
+ * an all-zero desired BSSID prevents automatic association. */
 static void
 qwzmac_up(struct qwzmac_dev *qd)
 {
@@ -456,16 +451,10 @@ qwzmac_qwz_detach(void *p)
 	printf("QwzWifi: qwz detached\n");
 }
 
-/*
- * System shutdown or restart: power the chip down, as Linux ath12k does in
- * its PCI .shutdown hook (ath12k_pci_hw_group_power_down()). In qwz that is
- * the suspend path, qwz_activate(DVACT_QUIESCE): qwz_stop(), then
- * qwz_core_deinit(), which ends in qwz_pci_power_down() (MHI to M3, SoC
- * reset). OpenBSD itself does not do this at reboot (its boot() only takes
- * interfaces down), but here the module keeps standby power across reboot
- * and S5, and a chip left running vanished from the bus (runs 7, 8, 12).
- * Bounded by qwzmac_activate_bounded(). Bus mastering goes off last.
- */
+/* Power down on shutdown/restart through qwz's suspend path: stop,
+ * core deinit, MHI M3 and SoC reset. The module retains standby power across
+ * reboot/S5; leaving it running can make it disappear from the PCI bus.
+ * The wait is bounded; bus mastering is disabled last. */
 #define QWZMAC_POWER_NSEC	SEC_TO_NSEC(10)
 
 static int qwzmac_power_done;
@@ -543,16 +532,9 @@ qwzmac_qwz_shutdown(void *p)
 	pci_bus_master_off(qd->pc);
 }
 
-/*
- * System sleep and wake, as OpenBSD's config_suspend_all() and
- * config_resume() drive qwz: DVACT_QUIESCE before sleep (qwz_stop(), then
- * qwz_core_deinit(): the chip is powered down, no DMA), DVACT_SUSPEND
- * (nothing in qwz); after wake DVACT_RESUME (HAL rings reset) and
- * DVACT_WAKEUP (qwz_init(): firmware loaded again, the interface is still
- * up, so net80211 joins the network again). That is the same bring-up as
- * the first "ifconfig up" after qwz_attach(). macOS saves and restores
- * the PCI config space (BARs, MSI) around sleep itself.
- */
+/* Follow OpenBSD's suspend/resume order: QUIESCE stops firmware and DMA;
+ * SUSPEND does nothing in qwz; RESUME resets rings; WAKEUP reloads firmware.
+ * Interface configuration survives. macOS restores PCI BARs and MSI. */
 static int qwzmac_suspended;	/* quiesced by qwzmac_qwz_sleep() */
 
 void

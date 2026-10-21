@@ -280,9 +280,7 @@ enum apple80211_powersave_mode
     // Standard modes
     APPLE80211_POWERSAVE_MODE_DISABLED       = 0,
     APPLE80211_POWERSAVE_MODE_80211          = 1,
-    APPLE80211_POWERSAVE_MODE_VENDOR         = 2,    //    Vendor specific mode, there should be
-    //  more general apple modes in the future.
-    //  Vendor modes also likely require more info.
+    APPLE80211_POWERSAVE_MODE_VENDOR         = 2,    // vendor-specific power saving
     // Mimo modes
     APPLE80211_POWERSAVE_MODE_MIMO_STATIC     = 3,
     APPLE80211_POWERSAVE_MODE_MIMO_DYNAMIC    = 4,
@@ -453,15 +451,13 @@ struct apple80211_rate
 #define APPLE80211_WME_AC_VI    2
 #define APPLE80211_WME_AC_VO    3
 
-// Working within the limitations of the kpi mbuf routines, the receive interface pointer
-// is the best place to put this for now since it is not used on the output path. The mbuf
-// kpi doesn't allow us to access unused flags, or I would put the WME AC in there like
-// everyone else.
+// Store WME AC in the receive-interface field, unused on the output path.
+// The mbuf KPI does not expose spare flags.
 
 #define APPLE80211_MBUF_SET_WME_AC( m, ac ) mbuf_pkthdr_setrcvif( m, (ifnet_t)ac )
 #define APPLE80211_MBUF_WME_AC( m ) (int)mbuf_pkthdr_rcvif( m )
 
-// FIXME: seems that rates array starts at 0x24, immediately after
+// Unverified layout: the rates array appears to start at offset 0x24.
 struct apple80211_scan_result
 {
     u_int32_t             version;        // 0x00 - 0x03

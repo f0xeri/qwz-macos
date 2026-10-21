@@ -1,7 +1,7 @@
 /*
  * QwzWifi compat: OpenBSD <net/if.h> and <net/if_var.h> (driver subset).
- * struct ifnet keeps OpenBSD's field names; the macOS side (an
- * IOEthernetController in stage 3) bridges to it. ifq is a simple list.
+ * ifnet keeps OpenBSD's field names and bridges to the macOS controller.
+ * ifq is a simple list.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #ifndef _QWZMAC_NET_IF_H_
