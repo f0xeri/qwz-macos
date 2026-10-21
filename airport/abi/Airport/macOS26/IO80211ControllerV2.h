@@ -34,7 +34,6 @@ class CommonFaultReporter;
 
 #include "../apple80211_ioctl.h"
 #include "IO80211SkywalkInterface.h"
-#include "../IO80211WorkLoop.h"
 #include "IO80211WorkQueue.h"
 #include "../CCStream.h"
 #include "../CCDataPipe.h"
