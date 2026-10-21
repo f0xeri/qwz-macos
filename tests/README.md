@@ -1,6 +1,6 @@
 # Host tests
 
-Run `scripts/test-compat.sh`. It builds C compat/net80211 code and the same
+Run `scripts/test-compat.sh` (and `scripts/test-airport-scan.sh` for the QwzAirport headers). It builds C compat/net80211 code and the same
 `kext/os_timer.cpp` and `kext/os_lock.cpp` used by the kext, with AddressSanitizer.
 There is no test implementation of `qwzmac_timer_*`, `qwzmac_spl_*` or
 `qwzmac_sleep`.

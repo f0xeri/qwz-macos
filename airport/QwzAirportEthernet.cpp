@@ -39,7 +39,6 @@ QwzAirportEthernet::initWithSkywalkInterface(IONetworkController *controller,
 	/* configd uses this for newly created non-built-in services. The
 	 * Ethernet implementation of this BSD endpoint still represents Wi-Fi;
 	 * reserve the Qualcomm/HeliPort name for the separate fallback endpoint.
-	 * Existing saved services are migrated explicitly by qwz-network-services.
 	 */
 	setProperty("Product Name", "Wi-Fi");
 	return true;

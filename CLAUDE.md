@@ -36,9 +36,12 @@ Facts about the development PC (hardware, boot stick paths, OpenCore state, reco
   place, `QWZAIRPORT`; provenance and a diff command in `airport/abi/UPSTREAM`) and the SDK.
   `scripts/kc-abi.py --check` / `--returns` verify those headers against this Mac's kernel
   collections (slots, sizes, return types); run both before adding a macOS build to
-  `QwzAirportBuilds` (airport/Info.plist). `scripts/airport-load.sh` loads it by hand (no stick).
+  `QwzAirportBuilds` (airport/Info.plist). `scripts/airport-check.sh check|status` inspects it on a running system (no stick).
 - `scripts/test-compat.sh` runs user-space unit tests of `compat/` (ASan, fake DMA addresses,
   `tests/os_user.c` stands in for the kernel). Run it after touching compat.
+- `scripts/test-airport-scan.sh` runs user-space tests of the QwzAirport headers (scan, join,
+  power, BSS, link metadata). Run it after touching `airport/*.hpp`.
+- `scripts/release.sh` builds from a clean tree and packs a release archive into `dist/`.
 
 ## OpenBSD sources: upstream + patches
 The OpenBSD revision is in `config/sources.json` (`sources.openbsd.revision`).
