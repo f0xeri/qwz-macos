@@ -1077,16 +1077,13 @@ QwzWifi::stop(IOService *provider)
 	fNetIf = nullptr;
 	IOLockUnlock(fIfLock);
 	if (fModeTc) {
-		while (thread_call_isactive(fModeTc)) { thread_call_cancel(fModeTc); IOSleep(5); }
+		qwzmac_thread_call_stop(fModeTc);
 		thread_call_free(fModeTc);
 		fModeTc = nullptr;
 	}
 	/* linkTc() calls into qwz: wait for it (fStopping stops re-arming). */
 	if (fLinkTc != nullptr) {
-		while (thread_call_isactive(fLinkTc)) {
-			thread_call_cancel(fLinkTc);
-			IOSleep(5);
-		}
+		qwzmac_thread_call_stop(fLinkTc);
 	}
 	/*
 	 * QwzAirport is our client, so IOKit stopped it (and it disconnected)
@@ -1099,10 +1096,7 @@ QwzWifi::stop(IOService *provider)
 		IOLockSleep(fIfLock, &fFrontCalls, THREAD_UNINT);
 	IOLockUnlock(fIfLock);
 	if (fFrontTc != nullptr) {
-		while (thread_call_isactive(fFrontTc)) {
-			thread_call_cancel(fFrontTc);
-			IOSleep(5);
-		}
+		qwzmac_thread_call_stop(fFrontTc);
 		thread_call_free(fFrontTc);
 		fFrontTc = nullptr;
 	}

@@ -148,18 +148,12 @@ QwzAirport::stopAsync()
 		fConnected = false;
 	}
 	if (fRadioTc != nullptr) {
-		while (thread_call_isactive(fRadioTc)) {
-			thread_call_cancel(fRadioTc);
-			IOSleep(5);
-		}
+		qwz_airport_call_stop(fRadioTc);
 		thread_call_free(fRadioTc);
 		fRadioTc = nullptr;
 	}
 	if (fPowerTc != nullptr) {
-		while (thread_call_isactive(fPowerTc)) {
-			thread_call_cancel(fPowerTc);
-			IOSleep(5);
-		}
+		qwz_airport_call_stop(fPowerTc);
 		thread_call_free(fPowerTc);
 		fPowerTc = nullptr;
 	}
@@ -527,7 +521,7 @@ int QwzAirport::park(void *cookie)
 	thread_call_t calls[] = {self->fPowerTc, self->fRadioTc};
 	for (auto call : calls) {
 		if (!call) continue;
-		while (thread_call_isactive(call)) { thread_call_cancel(call); IOSleep(5); }
+		qwz_airport_call_stop(call);
 	}
 	if (self->fNetIf) { self->fNetIf->stopJoins(); self->fNetIf->stopScans(); }
 	IOReturn result = self->fGate->runAction(parkGated);

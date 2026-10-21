@@ -123,10 +123,7 @@ void QwzAirportNub::cancelReady()
 {
 	__atomic_store_n(&fStopping, true, __ATOMIC_SEQ_CST);
 	if (fReadyTc != nullptr) {
-		while (thread_call_isactive(fReadyTc)) {
-			thread_call_cancel(fReadyTc);
-			IOSleep(5);
-		}
+		qwz_airport_call_stop(fReadyTc);
 		thread_call_free(fReadyTc);
 		fReadyTc = nullptr;
 	}

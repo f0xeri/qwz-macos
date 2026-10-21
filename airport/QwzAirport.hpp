@@ -42,6 +42,15 @@ static inline void qwz_airport_log(const char *format, ...)
 }
 #define ALOG(...) qwz_airport_log(__VA_ARGS__)
 
+/* Cancel tc and wait until no invocation of it runs, also one that re-arms itself. */
+static inline void qwz_airport_call_stop(thread_call_t tc)
+{
+	while (thread_call_isactive(tc)) {
+		thread_call_cancel(tc);
+		IOSleep(5);
+	}
+}
+
 #define QWZ_AIRPORT_VERSION	"0.3.7"
 
 class QwzAirportInterface;
