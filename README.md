@@ -1,8 +1,12 @@
-# QwzWifi
+# QwzWifi and QwzAirport
 
 Wi-Fi for the **Qualcomm FastConnect 7800 / WCN7850** (PCI `17cb:1107`, e.g. the NCM865 module on
-AMD X870E boards) on an x86_64 Hackintosh. It is OpenBSD's **qwz(4)** driver running inside a macOS
-kext, with an optional second kext that makes the card a native Wi-Fi interface on macOS Tahoe.
+AMD X870E boards) on an x86_64 Hackintosh. It is OpenBSD's [**qwz(4)**](https://man.openbsd.org/qwz)
+driver running inside a macOS kext (**QwzWifi**), with an optional second kext, **QwzAirport**, that
+makes the card a native Airport-style Wi-Fi interface (Wi-Fi menu, System Settings) on macOS Tahoe.
+Without QwzAirport the card works as an Ethernet interface controlled by
+[HeliPort](https://github.com/OpenIntelWireless/HeliPort), which should also work on earlier macOS
+versions (untested, see [macOS versions](#macos-versions)).
 
 > **Experimental.** Developed and tested on one machine. It runs in the kernel: a bug can panic the
 > Mac or, through DMA, corrupt memory. Keep a bootable copy of your EFI before installing.
@@ -50,7 +54,13 @@ OpenCore, firmware WLAN.HMT.1.1.c5-00302 (linux-firmware `20260309`).
 
 ## macOS versions
 
-**macOS Tahoe (26) only.** Nothing else is supported or tested; macOS 27 does not run on Intel Macs.
+Everything was tested on **macOS Tahoe (26.7.1)** only; macOS 27 does not run on Intel Macs.
+
+- **Native Wi-Fi mode (QwzAirport): Tahoe only**, and only on builds whose IO80211 ABI was checked
+  (today `25G241`).
+- **HeliPort mode (QwzWifi alone): should work on earlier macOS versions too**, but it has not been
+  tried there. In that case do **not** install `QwzAirport.kext`: it is not needed, and it stays
+  off on any build that is not in its allowlist anyway.
 
 | | QwzWifi | QwzAirport |
 |---|---|---|
@@ -59,7 +69,7 @@ OpenCore, firmware WLAN.HMT.1.1.c5-00302 (linux-firmware `20260309`).
 | Tested | 26.7.1 (25G241) | 26.7.1 (25G241) |
 
 QwzWifi is built with `-mmacosx-version-min=11.0` and declares KPI 19.0, so older systems may load
-it, but it was never run there. On another Tahoe build QwzAirport stays off and QwzWifi falls back
+it, but it was never run there (if you try, please report the result). On another Tahoe build QwzAirport stays off and QwzWifi falls back
 to HeliPort (see [Limitations](#limitations)). A build is added to `QwzAirportBuilds` only after
 `scripts/kc-abi.py --check` and `--returns` pass on it (they compare our IO80211 headers with the
 kernel's actual class layouts).
@@ -79,7 +89,8 @@ Pins and hashes are in `config/sources.json`; `docs/DEPENDENCIES.md` explains up
 ## Installing (OpenCore)
 
 1. Back up your EFI.
-2. Copy `build/QwzWifi.kext` (and `build/QwzAirport.kext` for native mode) into `EFI/OC/Kexts/`.
+2. Copy `build/QwzWifi.kext` (and `build/QwzAirport.kext` for native Airport mode on Tahoe; skip it
+   for HeliPort mode) into `EFI/OC/Kexts/`.
 3. `python3 scripts/oc-enable.py on [path/to/EFI/OC]`: backs up `config.plist`, adds the kext entries
    and the boot-arg `-qwzon`. The driver does nothing without `-qwzon`.
 4. Reboot. Driver log: `scripts/qwzlog.sh` (saves `~/Desktop/qwz.log`).
@@ -100,13 +111,19 @@ Pins and hashes are in `config/sources.json`; `docs/DEPENDENCIES.md` explains up
 QwzWifi is free software under the **GNU General Public License, version 2 only** (`LICENSE`).
 It builds on other people's work; `NOTICE.md` lists every third-party part and its license:
 
-- **OpenBSD**: the qwz(4) driver by Stefan Sperling (derived from Linux ath12k by The Linux Foundation
-  and Qualcomm), the net80211 stack and crypto code (ISC, BSD and similar licenses). OpenBSD's files
-  are not copied into this repository; our changes to them are in `patches/openbsd/`.
+- **[OpenBSD](https://github.com/openbsd/src)**: the [qwz(4)](https://man.openbsd.org/qwz) driver by
+  Stefan Sperling (derived from [Linux ath12k](https://wireless.docs.kernel.org/en/latest/en/users/drivers/ath12k.html)
+  by The Linux Foundation and Qualcomm), the net80211 stack and crypto code (ISC, BSD and similar
+  licenses). OpenBSD's files are not copied into this repository; our changes to them are in
+  `patches/openbsd/`.
 - **GPL code by other authors**: `QwzAirport.kext` is adapted from the native Wi-Fi front of
-  **laobamac/itlwm**, itself based on **AirportItlwm** by zxystd and the OpenIntelWireless
-  contributors (GPL-2.0). Its IO80211 headers come from laobamac/itlwm (`airport/abi/`, which also
-  contains Apple headers under APSL-2.0). `airport/CREDITS` lists the details.
-- **HeliPort** (BSD-3-Clause): the user-client protocol in `kext/heliport.h`.
-- **Qualcomm firmware** (linux-firmware, proprietary but redistributable): embedded in
-  `QwzWifi.kext`, not covered by the GPL; ship `firmware/Notice.txt` with any built kext.
+  [**laobamac/itlwm**](https://github.com/laobamac/itlwm), itself based on **AirportItlwm** by
+  [zxystd](https://github.com/zxystd) and the
+  [OpenIntelWireless](https://github.com/OpenIntelWireless/itlwm) contributors (GPL-2.0). Its IO80211
+  headers come from laobamac/itlwm (`airport/abi/`, which also contains Apple headers under
+  APSL-2.0). `airport/CREDITS` lists the details.
+- **[HeliPort](https://github.com/OpenIntelWireless/HeliPort)** (BSD-3-Clause): the user-client
+  protocol in `kext/heliport.h`.
+- **Qualcomm firmware** from [linux-firmware](https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git)
+  (proprietary but redistributable): embedded in `QwzWifi.kext`, not covered by the GPL; ship
+  `firmware/Notice.txt` with any built kext.
