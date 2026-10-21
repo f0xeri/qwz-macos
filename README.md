@@ -5,8 +5,9 @@ AMD X870E boards) on an x86_64 Hackintosh. It is OpenBSD's [**qwz(4)**](https://
 driver running inside a macOS kext (**QwzWifi**), with an optional second kext, **QwzAirport**, that
 makes the card a native Airport-style Wi-Fi interface (Wi-Fi menu, System Settings) on macOS Tahoe.
 Without QwzAirport the card works as an Ethernet interface controlled by
-[HeliPort](https://github.com/OpenIntelWireless/HeliPort), which should also work on earlier macOS
-versions (untested, see [macOS versions](#macos-versions)).
+[HeliPort](https://github.com/OpenIntelWireless/HeliPort). That mode speaks HeliPort's own interface,
+so it is expected to work on the older macOS versions HeliPort supports too (see
+[macOS versions](#macos-versions)).
 
 > **Experimental.** Developed and tested on one machine. It runs in the kernel: a bug can panic the
 > Mac or, through DMA, corrupt memory. Keep a bootable copy of your EFI before installing.
@@ -15,7 +16,7 @@ versions (untested, see [macOS versions](#macos-versions)).
 
 | Kext | What it is | Runs on |
 |---|---|---|
-| `QwzWifi.kext` | The driver: OpenBSD qwz(4) + net80211, firmware, DMA, interrupts. Without the native front it appears as an Ethernet interface ("Qualcomm Wi-Fi") controlled by [HeliPort](https://github.com/OpenIntelWireless/HeliPort) or `qwzctl`. | x86_64. Tested on macOS Tahoe (26.7.1); HeliPort mode should work on earlier versions (untested), see [macOS versions](#macos-versions) |
+| `QwzWifi.kext` | The driver: OpenBSD qwz(4) + net80211, firmware, DMA, interrupts. Without the native front it appears as an Ethernet interface ("Qualcomm Wi-Fi") controlled by [HeliPort](https://github.com/OpenIntelWireless/HeliPort) or `qwzctl`. | x86_64. Tested on macOS Tahoe (26.7.1); HeliPort mode is expected to work on earlier versions as well, see [macOS versions](#macos-versions) |
 | `QwzAirport.kext` | The native Wi-Fi front: the card appears in the Wi-Fi menu and System Settings as Wi-Fi. No hardware access; it talks to QwzWifi through a small C interface (`kext/airport_api.h`). | macOS 26.7.1 build **25G241** only |
 
 ## What works
@@ -58,9 +59,11 @@ Everything was tested on **macOS Tahoe (26.7.1)** only; macOS 27 does not run on
 
 - **Native Wi-Fi mode (QwzAirport): Tahoe only**, and only on builds whose IO80211 ABI was checked
   (today `25G241`).
-- **HeliPort mode (QwzWifi alone): should work on earlier macOS versions too**, but it has not been
-  tried there. In that case do **not** install `QwzAirport.kext`: it is not needed, and it stays
-  off on any build that is not in its allowlist anyway.
+- **HeliPort mode (QwzWifi alone): expected to work on earlier macOS versions too.** HeliPort runs
+  there, and QwzWifi implements the interface HeliPort talks to (`kext/heliport.h`); it is built for
+  macOS 11 and newer. Only Tahoe has been tried so far, so reports from other versions are welcome.
+  In this mode do **not** install `QwzAirport.kext`: it is not needed, and it stays off on any
+  build that is not in its allowlist anyway.
 
 | | QwzWifi | QwzAirport |
 |---|---|---|
@@ -68,8 +71,8 @@ Everything was tested on **macOS Tahoe (26.7.1)** only; macOS 27 does not run on
 | OpenCore entry | no `MinKernel`/`MaxKernel` | `MinKernel 25.0.0`, `MaxKernel 25.99.99` |
 | Tested | 26.7.1 (25G241) | 26.7.1 (25G241) |
 
-QwzWifi is built with `-mmacosx-version-min=11.0` and declares KPI 19.0, so older systems may load
-it, but it was never run there (if you try, please report the result). On another Tahoe build QwzAirport stays off and QwzWifi falls back
+QwzWifi is built with `-mmacosx-version-min=11.0` and declares KPI 19.0, so older systems can
+load it. On another Tahoe build QwzAirport stays off and QwzWifi falls back
 to HeliPort (see [Limitations](#limitations)). A build is added to `QwzAirportBuilds` only after
 `scripts/kc-abi.py --check` and `--returns` pass on it (they compare our IO80211 headers with the
 kernel's actual class layouts).

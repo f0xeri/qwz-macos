@@ -46,7 +46,8 @@ Back up your EFI first.
 
 ## What is in the archive
 - \`QwzWifi.kext\`: the driver. On its own it gives an Ethernet interface controlled by HeliPort or
-  \`qwzctl\`; this mode should also work on macOS versions before Tahoe (untested).
+  \`qwzctl\`; this mode is expected to work on earlier macOS versions too
+  (HeliPort supports them; only Tahoe has been tried so far).
 - \`QwzAirport.kext\`: the native Wi-Fi front (Wi-Fi menu, System Settings). Only on macOS builds
   listed in its allowlist (see README); skip it for HeliPort mode.
 - \`qwzctl\`: command-line client.
