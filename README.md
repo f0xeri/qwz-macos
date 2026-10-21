@@ -117,9 +117,9 @@ It builds on other people's work; `NOTICE.md` lists every third-party part and i
   licenses). OpenBSD's files are not copied into this repository; our changes to them are in
   `patches/openbsd/`.
 - **GPL code by other authors**: `QwzAirport.kext` is adapted from the native Wi-Fi front of
-  [**laobamac/itlwm**](https://github.com/laobamac/itlwm), itself based on **AirportItlwm** by
-  [zxystd](https://github.com/zxystd) and the
-  [OpenIntelWireless](https://github.com/OpenIntelWireless/itlwm) contributors (GPL-2.0). Its IO80211
+  [**laobamac/itlwm**](https://github.com/laobamac/itlwm), itself based on
+  [**AirportItlwm**](https://github.com/OpenIntelWireless/itlwm) (the `AirportItlwm` part of
+  OpenIntelWireless/itlwm) by zxystd and the OpenIntelWireless contributors (GPL-2.0). Its IO80211
   headers come from laobamac/itlwm (`airport/abi/`, which also contains Apple headers under
   APSL-2.0). `airport/CREDITS` lists the details.
 - **[HeliPort](https://github.com/OpenIntelWireless/HeliPort)** (BSD-3-Clause): the user-client
