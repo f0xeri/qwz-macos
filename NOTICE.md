@@ -32,8 +32,9 @@ the file they change (ISC for qwz), so that they can go back to OpenBSD.
 (University of California).
 
 **Note on BSD-4-Clause:** the Free Software Foundation considers the advertising clause incompatible
-with the GPL. Binary distributions that include these three files must show the acknowledgements
-below; replacing `if_media.c` with a small implementation of our own would remove the conflict.
+with the GPL. These files are built only into `QwzWifi.kext`, whose GPL code is this project's own
+(the GPL code of other authors is in `QwzAirport.kext`, a separate binary), so the project's authors
+accept them next to their GPL code. Binary distributions must show the acknowledgements:
 - This product includes software developed by Jonathan Stone and Jason R. Thorpe for the NetBSD Project.
 - This product includes software developed by Charles Hannum.
 
