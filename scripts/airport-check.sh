@@ -8,7 +8,7 @@
 # link this build, because thread_call_isactive is not a KPI export.
 set -e
 cd "${0:A:h}/.."
-ID=com.local.QwzAirport
+ID=com.f0xeri.QwzAirport
 
 case "$1" in
 check)
@@ -19,7 +19,7 @@ check)
   plutil -extract IOKitPersonalities.QwzAirport.QwzAirportBuilds xml1 -o - airport/Info.plist |
     grep -q "<string>$build</string>" && echo "$build is in QwzAirportBuilds" ||
     { echo "$build is NOT in QwzAirportBuilds (airport/Info.plist): QwzAirport would refuse to start"; exit 1; }
-  kextstat -l -b com.local.QwzWifi | grep -q QwzWifi ||
+  kextstat -l -b com.f0xeri.QwzWifi | grep -q QwzWifi ||
     { echo "QwzWifi is not loaded: boot with it first"; exit 1; }
   ioreg -r -c QwzWifi -d 1 | grep -q QwzWifi && echo "QwzWifi is running" ||
     { echo "no QwzWifi service (firmware not up?)"; exit 1; }

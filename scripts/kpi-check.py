@@ -82,7 +82,7 @@ def check(kext, sets, exports, opencore=False):
             continue
         frm = [l for l in libs if (l in sets and in_set(sets[l], sym)) or sym in exports.get(l, ())]
         if not frm and opencore and sym == '_thread_call_isactive' and info['CFBundleIdentifier'] in (
-                'com.local.QwzWifi', 'com.local.QwzAirport'):
+                'com.f0xeri.QwzWifi', 'com.f0xeri.QwzAirport'):
             injected.append(sym)
             continue
         if not frm:

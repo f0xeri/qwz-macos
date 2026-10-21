@@ -183,7 +183,7 @@ QwzAirport::initCCLogs()
 	o.pad9 = 0x1000000;
 	o.pad10 = 2;
 	trace("CoreCapture log pipe factory");
-	fLogPipe = CCPipe::withOwnerNameCapacity(this, "com.local.QwzAirport",
+	fLogPipe = CCPipe::withOwnerNameCapacity(this, "com.f0xeri.QwzAirport",
 	    "DriverLogs", &o);
 	if (fLogPipe == nullptr || getWorkLoop() == nullptr)
 		return false;
@@ -209,7 +209,7 @@ QwzAirport::initCCLogs()
 	strlcpy(o.directory_name, "WiFi", sizeof(o.directory_name));
 	o.pad9 = 0x2;
 	o.pad10 = 0x2800000;
-	fDataPathPipe = CCPipe::withOwnerNameCapacity(this, "com.local.QwzAirport",
+	fDataPathPipe = CCPipe::withOwnerNameCapacity(this, "com.f0xeri.QwzAirport",
 	    "DatapathEvents", &o);
 	if (fDataPathPipe == nullptr)
 		return false;
@@ -225,7 +225,7 @@ QwzAirport::initCCLogs()
 	strlcpy(o.name, "0", sizeof(o.name));
 	strlcpy(o.directory_name, "WiFi", sizeof(o.directory_name));
 	o.pipe_size = 128;
-	fSnapshotsPipe = CCPipe::withOwnerNameCapacity(this, "com.local.QwzAirport",
+	fSnapshotsPipe = CCPipe::withOwnerNameCapacity(this, "com.f0xeri.QwzAirport",
 	    "StateSnapshots", &o);
 	if (fSnapshotsPipe == nullptr)
 		return false;

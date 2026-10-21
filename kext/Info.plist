@@ -4,7 +4,7 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key><string>en</string>
 	<key>CFBundleExecutable</key><string>QwzWifi</string>
-	<key>CFBundleIdentifier</key><string>com.local.QwzWifi</string>
+	<key>CFBundleIdentifier</key><string>com.f0xeri.QwzWifi</string>
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>CFBundleName</key><string>QwzWifi</string>
 	<key>CFBundlePackageType</key><string>KEXT</string>
@@ -14,7 +14,7 @@
 	<dict>
 		<key>QwzWifi</key>
 		<dict>
-			<key>CFBundleIdentifier</key><string>com.local.QwzWifi</string>
+			<key>CFBundleIdentifier</key><string>com.f0xeri.QwzWifi</string>
 			<key>IOClass</key><string>QwzWifi</string>
 			<key>IOUserClientClass</key><string>QwzUserClient</string>
 			<key>QwzInterfaceName</key><string>Qualcomm Wi-Fi</string>
