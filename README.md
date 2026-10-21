@@ -88,6 +88,8 @@ Pins and hashes are in `config/sources.json`; `docs/DEPENDENCIES.md` explains up
 - Every DMA address the chip sees is checked to be below 4 GB and inside a known allocation (the
   IOMMU is usually off on AMD Hackintoshes).
 - Passwords and keys are never logged and are wiped after use.
+- The HeliPort/`qwzctl` control interface opens only for the user logged in at the console and for
+  root (switching to HeliPort mode needs root).
 
 ## License and credits
 

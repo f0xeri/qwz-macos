@@ -8,9 +8,10 @@
  * kext/heliport.h. Each request maps to a qwzmac_qwz_* management call
  * (adapter/control.c), which does what ifconfig(8) would in OpenBSD.
  *
- * Like itlwm, any local process may use it: the same as joining a network
- * from the menu bar. The passphrase is never logged and is wiped after the
- * PSK is derived.
+ * Only a user logged in at the console (as with the Wi-Fi menu) or root may
+ * open it; itlwm lets any process in, including one from an ssh login.
+ * Switching to HeliPort mode needs root. The passphrase is never logged and
+ * is wiped after the PSK is derived.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include <IOKit/IOLib.h>
@@ -77,6 +78,9 @@ QwzUserClient::initWithTask(task_t owningTask, void *securityID, UInt32 type,
 	fDriver = nullptr;
 	fScan = nullptr;
 	fScanCount = fScanNext = 0;
+	if (clientHasPrivilege(owningTask, kIOClientPrivilegeLocalUser) != kIOReturnSuccess &&
+	    clientHasPrivilege(owningTask, kIOClientPrivilegeAdministrator) != kIOReturnSuccess)
+		return false;
 	fLock = IOLockAlloc();
 	if (fLock == nullptr)
 		return false;
