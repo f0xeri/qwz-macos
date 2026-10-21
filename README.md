@@ -15,7 +15,7 @@ versions (untested, see [macOS versions](#macos-versions)).
 
 | Kext | What it is | Runs on |
 |---|---|---|
-| `QwzWifi.kext` | The driver: OpenBSD qwz(4) + net80211, firmware, DMA, interrupts. Without the native front it appears as an Ethernet interface ("Qualcomm Wi-Fi") controlled by [HeliPort](https://github.com/OpenIntelWireless/HeliPort) or `qwzctl`. | macOS Tahoe (26), x86_64, see [macOS versions](#macos-versions) |
+| `QwzWifi.kext` | The driver: OpenBSD qwz(4) + net80211, firmware, DMA, interrupts. Without the native front it appears as an Ethernet interface ("Qualcomm Wi-Fi") controlled by [HeliPort](https://github.com/OpenIntelWireless/HeliPort) or `qwzctl`. | x86_64. Tested on macOS Tahoe (26.7.1); HeliPort mode should work on earlier versions (untested), see [macOS versions](#macos-versions) |
 | `QwzAirport.kext` | The native Wi-Fi front: the card appears in the Wi-Fi menu and System Settings as Wi-Fi. No hardware access; it talks to QwzWifi through a small C interface (`kext/airport_api.h`). | macOS 26.7.1 build **25G241** only |
 
 ## What works
