@@ -10,6 +10,7 @@
  * Boot-args:
  *   -qwzon     required, otherwise the driver does not attach at all
  *   -qwzprobe  read-only diagnostics: log IDs/BAR/MSI, do not start the chip
+ *   -qwznovht  no 802.11ac: stay on 802.11n (up to 40 MHz)
  *   qwzdebug=N qwz debug mask (QWZ_D_* in qwzvar.h), default 0 (errors only).
  *              0x7 = MISC|MHI|QMI; slows bring-up, qwz's 1 s QMI timeouts may fire
  *
@@ -50,6 +51,7 @@
 #define QWZ_RATE_POLL_MS	2000
 
 extern "C" uint32_t qwz_debug;	/* qwz/qwz.c, built with QWZ_DEBUG */
+extern "C" uint32_t qwz_novht;	/* qwz/qwz.c: 1 keeps the station on 802.11n */
 
 OSDefineMetaClassAndStructors(QwzWifi, IOEthernetController)
 
@@ -301,6 +303,8 @@ QwzWifi::start(IOService *provider)
 	UInt32 mask = 0;
 	PE_parse_boot_argn("qwzdebug", &mask, sizeof(mask));
 	qwz_debug = mask;
+	char novht[16];
+	qwz_novht = PE_parse_boot_argn("-qwznovht", novht, sizeof(novht)) ? 1 : 0;
 
 	fNativePreferred = getProperty("QwzNativeData") == kOSBooleanTrue;
 	bool have_net = fNativePreferred ? false : readNetwork(&net);

@@ -18,7 +18,64 @@ qwzmac_chan40(struct ieee80211_node *ni)
 	    (sco == IEEE80211_HTOP0_SCO_SCA || sco == IEEE80211_HTOP0_SCO_SCB);
 }
 
-/* spl lock held, associated. Sets *mcsp to the HT MCS index or -1. */
+/* Width in MHz the station runs on: the width the firmware vdev was started
+ * with, else what the HT operation element says. */
+static int
+qwzmac_width(struct ieee80211com *ic, struct ieee80211_node *ni)
+{
+	struct qwz_softc *sc = ic->ic_softc;
+	int width = qwz_vdev_width(&sc->sc_vif);
+
+	if (width != 0)
+		return width;
+	return (ni->ni_flags & IEEE80211_NODE_HT) && qwzmac_chan40(ni) ? 40 : 20;
+}
+
+/* Spatial streams of a VHT link: those both sides handle, at most our chains. */
+static int
+qwzmac_vht_nss(struct ieee80211com *ic, struct ieee80211_node *ni)
+{
+	struct qwz_softc *sc = ic->ic_softc;
+	int ss, nss = 1;
+
+	for (ss = 1; ss <= IEEE80211_VHT_NUM_SS && ss <= sc->num_tx_chains; ss++)
+		if (((ni->ni_vht_rxmcs & IEEE80211_VHT_MCS_FOR_SS_MASK(ss)) >>
+		    IEEE80211_VHT_MCS_FOR_SS_SHIFT(ss)) !=
+		    IEEE80211_VHT_MCS_SS_NOT_SUPP)
+			nss = ss;
+	return nss;
+}
+
+/*
+ * Rate of a VHT link in bit/s, from the MCS the firmware reported with its
+ * last transmit completion. The base rates are 802.11ac-2013 Table 22-30..,
+ * one stream, 20 MHz, long guard interval; wider channels carry
+ * 52/108/234 data subcarriers instead of 52, a short guard interval adds a
+ * ninth. (net80211's own table of MIMO2 80 MHz rates misses MCS 7.)
+ */
+static uint64_t
+qwzmac_vht_rate(struct ieee80211com *ic, struct ieee80211_node *ni, int mcs)
+{
+	static const uint32_t mcs_kbps[] = { 6500, 13000, 19500, 26000, 39000,
+	    52000, 58500, 65000, 78000, 86700 };
+	int width = qwzmac_width(ic, ni);
+	int nsd = width >= 80 ? 234 : width >= 40 ? 108 : 52;
+	uint64_t kbps;
+	int sgi;
+
+	if (mcs < 0 || mcs >= (int)nitems(mcs_kbps))
+		return 0;
+	kbps = (uint64_t)mcs_kbps[mcs] * qwzmac_vht_nss(ic, ni) * nsd / 52;
+	if (width >= 80)
+		sgi = (ni->ni_flags & IEEE80211_NODE_VHT_SGI80) != 0;
+	else
+		sgi = ieee80211_ra_use_ht_sgi(ni);
+	if (sgi)
+		kbps = kbps * 10 / 9;
+	return kbps * 1000;
+}
+
+/* spl lock held, associated. Sets *mcsp to the HT (or VHT) MCS index or -1. */
 static uint64_t
 qwzmac_ni_tx_rate(struct ieee80211com *ic, struct ieee80211_node *ni,
     int *mcsp)
@@ -27,6 +84,10 @@ qwzmac_ni_tx_rate(struct ieee80211com *ic, struct ieee80211_node *ni,
 	int i, mcs, nss, chan40, sgi;
 
 	*mcsp = -1;
+	if (ni->ni_flags & IEEE80211_NODE_VHT) {
+		*mcsp = ni->ni_txmcs;
+		return qwzmac_vht_rate(ic, ni, ni->ni_txmcs);
+	}
 	if (ni->ni_flags & IEEE80211_NODE_HT) {
 		for (i = 0, nss = 1; i < 4; i++)
 			if (ic->ic_sup_mcs[i] & ni->ni_rxmcs[i])
@@ -134,8 +195,7 @@ qwzmac_qwz_sta_info(void *p, struct qwzmac_sta_info *si)
 		memcpy(si->ssid, ni->ni_essid, si->ssid_len);
 		memcpy(si->bssid, ni->ni_bssid, sizeof(si->bssid));
 		si->channel = ieee80211_chan2ieee(ic, ni->ni_chan);
-		si->width_mhz = (ni->ni_flags & IEEE80211_NODE_HT) &&
-		    qwzmac_chan40(ni) ? 40 : 20;
+		si->width_mhz = qwzmac_width(ic, ni);
 		si->rssi_dbm = QWZMAC_RSSI_DBM(ni);
 		si->noise_dbm = ATH12K_DEFAULT_NOISE_FLOOR;
 		si->rate_bps = qwzmac_ni_tx_rate(ic, ni, &si->mcs);

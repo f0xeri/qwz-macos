@@ -51,6 +51,14 @@ repository (`scripts/fetch-sources.sh` downloads them and checks their SHA-256).
 Qualcomm's `Notice.txt`, downloaded next to them into `firmware/`; anyone who distributes a built
 `QwzWifi.kext` must include that file.
 
+### razvanccr/AirportWCN7850 (comparison only)
+The 802.11ac support in `patches/openbsd/sys/dev/ic/qwz.c.patch` was written after studying how
+**razvanccr/AirportWCN7850** (https://github.com/razvanccr/AirportWCN7850, GPL-2.0-or-later, commit
+`c3f75e4`) enables VHT on the same chip: which capabilities and peer-association fields the firmware
+needs, that the vdev must start on the final channel width, and that this needs a negotiation before
+authentication. The code is our own, written against our OpenBSD net80211 and Linux ath12k's
+logic (`ath12k_mac_setup_ht_vht_cap()`, `ath12k_peer_assoc_h_vht()`); no file was copied.
+
 ## In QwzAirport.kext
 
 ### laobamac/itlwm and AirportItlwm (GPL-2.0)

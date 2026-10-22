@@ -1,7 +1,19 @@
 diff --git a/sys/dev/ic/qwzvar.h b/sys/dev/ic/qwzvar.h
 --- a/sys/dev/ic/qwzvar.h
 +++ b/sys/dev/ic/qwzvar.h
-@@ -2008,6 +2008,16 @@ struct qwz_softc {
+@@ -1856,6 +1856,11 @@ struct qwz_vif {
+ 	bool bcca_zero_sent;
+ 	bool do_not_send_tmpl;
+ 	struct ieee80211_channel *chan;
++#ifdef QWZMAC
++	/* The channel the vdev runs on, set when it starts. */
++	int chan_mode;			/* enum wmi_phy_mode */
++	uint32_t chan_cfreq1;		/* centre frequency, MHz */
++#endif
+ #if 0
+ 	struct ath12k_arp_ns_offload arp_ns_offload;
+ 	struct ath12k_rekey_data rekey_data;
+@@ -2008,6 +2013,16 @@ struct qwz_softc {
  	/* Task for firmware BlockAck setup/teardown and its arguments. */
  	struct task		ba_task;
  	struct qwz_ba_task_data	ba_rx;
@@ -18,7 +30,7 @@ diff --git a/sys/dev/ic/qwzvar.h b/sys/dev/ic/qwzvar.h
  
  	enum ath12k_11d_state	state_11d;
  	int			completed_11d_scan;
-@@ -2084,6 +2094,12 @@ struct qwz_softc {
+@@ -2084,6 +2099,12 @@ struct qwz_softc {
  	int				peer_mapped;
  	int				peer_delete_done;
  	int				vdev_setup_done;
@@ -31,7 +43,7 @@ diff --git a/sys/dev/ic/qwzvar.h b/sys/dev/ic/qwzvar.h
  	int				peer_assoc_done;
  
  	struct qwz_dbring_cap	*db_caps;
-@@ -2180,6 +2196,11 @@ void	qwz_stop(struct ifnet *);
+@@ -2180,6 +2201,11 @@ void	qwz_stop(struct ifnet *);
  void	qwz_watchdog(struct ifnet *);
  void	qwz_init_task(void *);
  int	qwz_newstate(struct ieee80211com *, enum ieee80211_state, int);
@@ -43,3 +55,12 @@ diff --git a/sys/dev/ic/qwzvar.h b/sys/dev/ic/qwzvar.h
  void	qwz_newstate_task(void *);
  
  struct qwz_node {
+@@ -2234,3 +2260,8 @@ static inline enum ieee80211_edca_ac qwz_tid_to_ac(uint32_t tid)
+ 		((tid == 4) || (tid == 5)) ? EDCA_AC_VI :
+ 		EDCA_AC_VO);
+ }
++
++#ifdef QWZMAC
++/* qwz.c: width in MHz the station vdev runs on, 0 while it is not started. */
++int qwz_vdev_width(struct qwz_vif *);
++#endif
