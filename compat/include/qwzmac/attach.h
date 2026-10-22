@@ -129,6 +129,7 @@ struct qwzmac_sta_info {
 	int		mcs;		/* HT/VHT/HE MCS index of the last TX, or -1 */
 	uint64_t	rate_bps;	/* see qwzmac_qwz_tx_rate() */
 	unsigned	gi_ns;		/* guard interval of that rate: 400, 800 */
+	unsigned	nss;		/* spatial streams of the link */
 };
 /* state is always set; the rest only when associated (returns ENOTCONN
  * otherwise). */

@@ -51,6 +51,7 @@ public:
 	IOReturn getRSSI(apple80211_rssi_data *) override;
 	IOReturn getRATE(apple80211_rate_data *) override;
 	IOReturn getMCS(apple80211_mcs_data *) override;
+	IOReturn getMCS_VHT(apple80211_mcs_vht_data *) override;
 	IOReturn getGUARD_INTERVAL(apple80211_guard_interval_data *) override;
 	IOReturn getWCL_LOW_LATENCY_INFO(apple80211_low_latency_info *) override;
 	IOReturn setWCL_UPDATE_FAST_LANE(apple80211_fastlane *) override;

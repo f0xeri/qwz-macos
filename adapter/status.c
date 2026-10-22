@@ -75,6 +75,33 @@ qwzmac_vht_rate(struct ieee80211com *ic, struct ieee80211_node *ni, int mcs)
 	return kbps * 1000;
 }
 
+/* Spatial streams of an HE link: those both sides handle, at most our chains. */
+static int
+qwzmac_he_nss(struct ieee80211com *ic, struct ieee80211_node *ni)
+{
+	struct qwz_softc *sc = ic->ic_softc;
+	int ss, nss = 1;
+
+	for (ss = 1; ss <= IEEE80211_HE_NUM_SS && ss <= sc->num_tx_chains; ss++)
+		if (((ni->ni_he_rxmcs_80 & IEEE80211_HE_MCS_FOR_SS_MASK(ss)) >>
+		    IEEE80211_HE_MCS_FOR_SS_SHIFT(ss)) !=
+		    IEEE80211_HE_MCS_SS_NOT_SUPP)
+			nss = ss;
+	return nss;
+}
+
+/* Spatial streams of an HT link: the highest group of MCS both sides have. */
+static int
+qwzmac_ht_nss(struct ieee80211com *ic, struct ieee80211_node *ni)
+{
+	int i, nss = 1;
+
+	for (i = 0; i < 4; i++)
+		if (ic->ic_sup_mcs[i] & ni->ni_rxmcs[i])
+			nss = i + 1;
+	return nss;
+}
+
 /*
  * Rate of an HE link in bit/s, from the MCS the firmware reported with its
  * last transmit completion. Data rate = data subcarriers (234/468/980 at
@@ -87,19 +114,13 @@ qwzmac_he_rate(struct ieee80211com *ic, struct ieee80211_node *ni, int mcs)
 {
 	static const uint8_t sixths[] = { 3, 6, 9, 12, 18, 24, 27, 30, 36, 40,
 	    45, 50 };
-	struct qwz_softc *sc = ic->ic_softc;
 	int width = qwzmac_width(ic, ni);
 	int nsd = width >= 80 ? 980 : width >= 40 ? 468 : 234;
-	int ss, nss = 1;
 
 	if (mcs < 0 || mcs >= (int)nitems(sixths))
 		return 0;
-	for (ss = 1; ss <= IEEE80211_HE_NUM_SS && ss <= sc->num_tx_chains; ss++)
-		if (((ni->ni_he_rxmcs_80 & IEEE80211_HE_MCS_FOR_SS_MASK(ss)) >>
-		    IEEE80211_HE_MCS_FOR_SS_SHIFT(ss)) !=
-		    IEEE80211_HE_MCS_SS_NOT_SUPP)
-			nss = ss;
-	return (uint64_t)nsd * sixths[mcs] * nss * 10000 / (6 * 136) * 1000;
+	return (uint64_t)nsd * sixths[mcs] * qwzmac_he_nss(ic, ni) * 10000 /
+	    (6 * 136) * 1000;
 }
 
 /* spl lock held, associated. Sets *mcsp to the HT (or VHT, HE) MCS index or -1. */
@@ -234,6 +255,9 @@ qwzmac_qwz_sta_info(void *p, struct qwzmac_sta_info *si)
 		si->rssi_dbm = QWZMAC_RSSI_DBM(ni);
 		si->noise_dbm = ATH12K_DEFAULT_NOISE_FLOOR;
 		si->rate_bps = qwzmac_ni_tx_rate(ic, ni, &si->mcs);
+		si->nss = (ni->ni_flags & IEEE80211_NODE_HE) ? qwzmac_he_nss(ic, ni) :
+		    (ni->ni_flags & IEEE80211_NODE_VHT) ? qwzmac_vht_nss(ic, ni) :
+		    (ni->ni_flags & IEEE80211_NODE_HT) ? qwzmac_ht_nss(ic, ni) : 1;
 		/* HE: the 0.8 us guard interval its rate assumes; VHT/HT: short
 		 * only if negotiated for the width in use. */
 		si->gi_ns = (ni->ni_flags & IEEE80211_NODE_HE) ? 800 :
@@ -456,17 +480,7 @@ qwzmac_copy_bss(struct ieee80211com *ic, struct ieee80211_node *ni,
 	 * fields, not the elements, so build them. They come after RSN, and only
 	 * if they fit: the RSN element must not be cut.
 	 */
-	/*
-	 * Not for the BSS we are associated to. When macOS reads VHT or HE in
-	 * that network's elements it asks for the link's NSS, MCS and guard
-	 * interval in a way that ends in "unsupported" (airportd logs
-	 * err=0xe00002c7 for GET NSS, GET MCS INDEX, GET GUARD INTERVAL), and
-	 * wdutil shows 0 for all three. Without them it asks us, which works.
-	 * The cost is that the current network still shows as 802.11a/g.
-	 */
-	if (!(ic->ic_state == IEEE80211_S_RUN && ic->ic_bss != NULL &&
-	    IEEE80211_ADDR_EQ(ni->ni_bssid, ic->ic_bss->ni_bssid)))
-		qwzmac_add_phy_ies(ni, channel, &ie, b->ies + sizeof(b->ies));
+	qwzmac_add_phy_ies(ni, channel, &ie, b->ies + sizeof(b->ies));
 	b->ie_len = ie - b->ies; /* <= 34+10+3+257+24+14+29 */
 }
 

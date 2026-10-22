@@ -616,6 +616,10 @@ IOReturn QwzAirportInterface::getMCS(apple80211_mcs_data *out)
 {
 	return fCtl->gate()->runAction(joinCommand, this, (void *)13, out);
 }
+IOReturn QwzAirportInterface::getMCS_VHT(apple80211_mcs_vht_data *out)
+{
+	return fCtl->gate()->runAction(joinCommand, this, (void *)15, out);
+}
 IOReturn QwzAirportInterface::getGUARD_INTERVAL(apple80211_guard_interval_data *out)
 {
 	return fCtl->gate()->runAction(joinCommand, this, (void *)14, out);
@@ -656,7 +660,7 @@ IOReturn QwzAirportInterface::joinCommand(OSObject *, void *a0, void *a1,
 {
 	auto self = static_cast<QwzAirportInterface *>(a0);
 	unsigned operation = static_cast<unsigned>(reinterpret_cast<uintptr_t>(a1));
-	if (operation >= 9 && operation <= 14 && operation != 12) {
+	if (operation >= 9 && operation <= 15 && operation != 12) {
 		if (!a2) return kIOReturnBadArgument;
 		if (self->fJoinStation.state != 4) return kIOReturnNotReady;
 		/* The station snapshot is taken once, at join. airportd asks for the
@@ -675,6 +679,21 @@ IOReturn QwzAirportInterface::joinCommand(OSObject *, void *a0, void *a1,
 			bzero(out, sizeof(*out));
 			out->version = APPLE80211_VERSION;
 			out->index = self->fJoinStation.mcs > 0 ? static_cast<uint32_t>(self->fJoinStation.mcs) : 0;
+			return kIOReturnSuccess;
+		}
+		if (operation == 15) {
+			/* For an 802.11ac or ax link macOS asks for MCS, streams, width and
+			 * guard interval in this one request, and answers "unsupported" to the
+			 * single-field ones (GET MCS INDEX, GET NSS, GET GUARD INTERVAL) if it
+			 * fails: wdutil then shows 0 for all three. */
+			auto out = static_cast<apple80211_mcs_vht_data *>(a2);
+			bzero(out, sizeof(*out));
+			out->version = APPLE80211_VERSION;
+			out->index = self->fJoinStation.mcs > 0 ? static_cast<uint32_t>(self->fJoinStation.mcs) : 0;
+			out->nss = self->fJoinStation.nss ? self->fJoinStation.nss : 1;
+			out->bw = self->fJoinStation.width_mhz ? self->fJoinStation.width_mhz : 20;
+			out->guard_interval = self->fJoinStation.gi_ns && self->fJoinStation.gi_ns < 800 ?
+			    APPLE80211_GI_SHORT : APPLE80211_GI_LONG;
 			return kIOReturnSuccess;
 		}
 		if (operation == 14) {
