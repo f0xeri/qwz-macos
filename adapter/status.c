@@ -395,7 +395,7 @@ qwzmac_qwz_scan_poll(void *p, uint32_t ticket)
 	return error;
 }
 
-/* HT operation, VHT capabilities and HE capabilities of a node, as elements. */
+/* HT capabilities and operation, VHT capabilities and HE capabilities of a node, as elements. */
 static void
 qwzmac_add_phy_ies(struct ieee80211_node *ni, unsigned channel, uint8_t **iep,
     uint8_t *end)
@@ -404,6 +404,20 @@ qwzmac_add_phy_ies(struct ieee80211_node *ni, unsigned channel, uint8_t **iep,
 	uint8_t phy0 = ni->ni_he_phy_cap[0];
 	unsigned hemcs = IEEE80211_HE_MCS_NSS_SIZE(phy0);
 
+	if ((ni->ni_flags & IEEE80211_NODE_HTCAP) && end - ie >= 2 + 26) {
+		*ie++ = IEEE80211_ELEMID_HTCAPS; *ie++ = 26;
+		*ie++ = ni->ni_htcaps; *ie++ = ni->ni_htcaps >> 8;
+		*ie++ = ni->ni_ampdu_param;
+		/* The supported MCS set: the Rx bitmap, the highest Rx rate, the Tx set. */
+		memcpy(ie, ni->ni_rxmcs, sizeof(ni->ni_rxmcs)); ie += sizeof(ni->ni_rxmcs);
+		*ie++ = ni->ni_max_rxrate; *ie++ = ni->ni_max_rxrate >> 8;
+		*ie++ = ni->ni_tx_mcs_set;
+		*ie++ = 0; *ie++ = 0; *ie++ = 0;
+		*ie++ = ni->ni_htxcaps; *ie++ = ni->ni_htxcaps >> 8;
+		*ie++ = ni->ni_txbfcaps; *ie++ = ni->ni_txbfcaps >> 8;
+		*ie++ = ni->ni_txbfcaps >> 16; *ie++ = ni->ni_txbfcaps >> 24;
+		*ie++ = ni->ni_aselcaps;
+	}
 	if ((ni->ni_flags & IEEE80211_NODE_HTCAP) && end - ie >= 2 + 22) {
 		*ie++ = IEEE80211_ELEMID_HTOP; *ie++ = 22;
 		/* net80211 records the primary channel only from a parsed HT
