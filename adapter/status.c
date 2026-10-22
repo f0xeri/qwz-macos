@@ -220,8 +220,12 @@ qwzmac_qwz_sta_info(void *p, struct qwzmac_sta_info *si)
 	    ni->ni_chan == NULL) {
 		error = ENOTCONN;
 	} else {
-		si->phy = ic->ic_curmode > IEEE80211_MODE_AUTO ?
-		    ic->ic_curmode - 1 : 0;
+		/* The negotiated flags, not ic_curmode: net80211 drops that to
+		 * 11ac/11n after a background scan. */
+		si->phy = (ni->ni_flags & IEEE80211_NODE_HE) ? 5 :
+		    (ni->ni_flags & IEEE80211_NODE_VHT) ? 4 :
+		    (ni->ni_flags & IEEE80211_NODE_HT) ? 3 :
+		    ic->ic_curmode > IEEE80211_MODE_AUTO ? ic->ic_curmode - 1 : 0;
 		si->ssid_len = MIN(ni->ni_esslen, sizeof(si->ssid));
 		memcpy(si->ssid, ni->ni_essid, si->ssid_len);
 		memcpy(si->bssid, ni->ni_bssid, sizeof(si->bssid));
@@ -230,6 +234,14 @@ qwzmac_qwz_sta_info(void *p, struct qwzmac_sta_info *si)
 		si->rssi_dbm = QWZMAC_RSSI_DBM(ni);
 		si->noise_dbm = ATH12K_DEFAULT_NOISE_FLOOR;
 		si->rate_bps = qwzmac_ni_tx_rate(ic, ni, &si->mcs);
+		/* HE: the 0.8 us guard interval its rate assumes; VHT/HT: short
+		 * only if negotiated for the width in use. */
+		si->gi_ns = (ni->ni_flags & IEEE80211_NODE_HE) ? 800 :
+		    (ni->ni_flags & IEEE80211_NODE_VHT) &&
+		    qwzmac_width(ic, ni) >= 80 ?
+		    ((ni->ni_flags & IEEE80211_NODE_VHT_SGI80) ? 400 : 800) :
+		    (ni->ni_flags & (IEEE80211_NODE_HT | IEEE80211_NODE_VHT)) ?
+		    (ieee80211_ra_use_ht_sgi(ni) ? 400 : 800) : 800;
 	}
 	qwzmac_spl_unlock();
 	return error;

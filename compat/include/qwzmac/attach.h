@@ -126,8 +126,9 @@ struct qwzmac_sta_info {
 	unsigned	width_mhz;
 	int		rssi_dbm;
 	int		noise_dbm;
-	int		mcs;		/* HT MCS index of the last TX, or -1 */
+	int		mcs;		/* HT/VHT/HE MCS index of the last TX, or -1 */
 	uint64_t	rate_bps;	/* see qwzmac_qwz_tx_rate() */
+	unsigned	gi_ns;		/* guard interval of that rate: 400, 800 */
 };
 /* state is always set; the rest only when associated (returns ENOTCONN
  * otherwise). */

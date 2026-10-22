@@ -612,6 +612,14 @@ IOReturn QwzAirportInterface::getRATE(apple80211_rate_data *out)
 {
 	return fCtl->gate()->runAction(joinCommand, this, (void *)11, out);
 }
+IOReturn QwzAirportInterface::getMCS(apple80211_mcs_data *out)
+{
+	return fCtl->gate()->runAction(joinCommand, this, (void *)13, out);
+}
+IOReturn QwzAirportInterface::getGUARD_INTERVAL(apple80211_guard_interval_data *out)
+{
+	return fCtl->gate()->runAction(joinCommand, this, (void *)14, out);
+}
 
 void QwzAirportInterface::finishJoin(IOReturn error)
 {
@@ -648,9 +656,35 @@ IOReturn QwzAirportInterface::joinCommand(OSObject *, void *a0, void *a1,
 {
 	auto self = static_cast<QwzAirportInterface *>(a0);
 	unsigned operation = static_cast<unsigned>(reinterpret_cast<uintptr_t>(a1));
-	if (operation >= 9 && operation <= 11) {
+	if (operation >= 9 && operation <= 14 && operation != 12) {
 		if (!a2) return kIOReturnBadArgument;
 		if (self->fJoinStation.state != 4) return kIOReturnNotReady;
+		/* The station snapshot is taken once, at join. airportd asks for the
+		 * signal, rate, MCS and guard interval all along the connection: refresh it
+		 * from the driver (a quick read under its lock, no firmware call), but
+		 * only while still on the same BSS. */
+		if (operation != 9) {
+			qwzmac_sta_info fresh;
+			auto drv = self->fCtl->driver();
+			if (drv->sta_info(drv->dev, &fresh) == 0 && fresh.state == 4 &&
+			    !memcmp(fresh.bssid, self->fJoinStation.bssid, 6))
+				self->fJoinStation = fresh;
+		}
+		if (operation == 13) {
+			auto out = static_cast<apple80211_mcs_data *>(a2);
+			bzero(out, sizeof(*out));
+			out->version = APPLE80211_VERSION;
+			out->index = self->fJoinStation.mcs > 0 ? static_cast<uint32_t>(self->fJoinStation.mcs) : 0;
+			return kIOReturnSuccess;
+		}
+		if (operation == 14) {
+			auto out = static_cast<apple80211_guard_interval_data *>(a2);
+			bzero(out, sizeof(*out));
+			out->version = APPLE80211_VERSION;
+			out->interval = self->fJoinStation.gi_ns && self->fJoinStation.gi_ns < 800 ?
+			    APPLE80211_GI_SHORT : APPLE80211_GI_LONG;
+			return kIOReturnSuccess;
+		}
 		if (operation == 9) {
 			if (!self->fJoinChannel.number) return kIOReturnNotReady;
 			memcpy(a2, &self->fJoinChannel, sizeof(self->fJoinChannel));
