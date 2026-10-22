@@ -75,7 +75,34 @@ qwzmac_vht_rate(struct ieee80211com *ic, struct ieee80211_node *ni, int mcs)
 	return kbps * 1000;
 }
 
-/* spl lock held, associated. Sets *mcsp to the HT (or VHT) MCS index or -1. */
+/*
+ * Rate of an HE link in bit/s, from the MCS the firmware reported with its
+ * last transmit completion. Data rate = data subcarriers (234/468/980 at
+ * 20/40/80 MHz) x bits per subcarrier x coding rate x streams / symbol time,
+ * with the 0.8 us guard interval (13.6 us symbols): the fastest case the AP
+ * can pick. bits x coding rate come in sixths: MCS 0 is 1/2, MCS 11 is 8 1/3.
+ */
+static uint64_t
+qwzmac_he_rate(struct ieee80211com *ic, struct ieee80211_node *ni, int mcs)
+{
+	static const uint8_t sixths[] = { 3, 6, 9, 12, 18, 24, 27, 30, 36, 40,
+	    45, 50 };
+	struct qwz_softc *sc = ic->ic_softc;
+	int width = qwzmac_width(ic, ni);
+	int nsd = width >= 80 ? 980 : width >= 40 ? 468 : 234;
+	int ss, nss = 1;
+
+	if (mcs < 0 || mcs >= (int)nitems(sixths))
+		return 0;
+	for (ss = 1; ss <= IEEE80211_HE_NUM_SS && ss <= sc->num_tx_chains; ss++)
+		if (((ni->ni_he_rxmcs_80 & IEEE80211_HE_MCS_FOR_SS_MASK(ss)) >>
+		    IEEE80211_HE_MCS_FOR_SS_SHIFT(ss)) !=
+		    IEEE80211_HE_MCS_SS_NOT_SUPP)
+			nss = ss;
+	return (uint64_t)nsd * sixths[mcs] * nss * 10000 / (6 * 136) * 1000;
+}
+
+/* spl lock held, associated. Sets *mcsp to the HT (or VHT, HE) MCS index or -1. */
 static uint64_t
 qwzmac_ni_tx_rate(struct ieee80211com *ic, struct ieee80211_node *ni,
     int *mcsp)
@@ -84,6 +111,10 @@ qwzmac_ni_tx_rate(struct ieee80211com *ic, struct ieee80211_node *ni,
 	int i, mcs, nss, chan40, sgi;
 
 	*mcsp = -1;
+	if (ni->ni_flags & IEEE80211_NODE_HE) {
+		*mcsp = ni->ni_txmcs;
+		return qwzmac_he_rate(ic, ni, ni->ni_txmcs);
+	}
 	if (ni->ni_flags & IEEE80211_NODE_VHT) {
 		*mcsp = ni->ni_txmcs;
 		return qwzmac_vht_rate(ic, ni, ni->ni_txmcs);

@@ -8,8 +8,8 @@
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>CFBundleName</key><string>QwzWifi</string>
 	<key>CFBundlePackageType</key><string>KEXT</string>
-	<key>CFBundleShortVersionString</key><string>0.0.25</string>
-	<key>CFBundleVersion</key><string>0.0.25</string>
+	<key>CFBundleShortVersionString</key><string>0.0.26</string>
+	<key>CFBundleVersion</key><string>0.0.26</string>
 	<key>IOKitPersonalities</key>
 	<dict>
 		<key>QwzWifi</key>
