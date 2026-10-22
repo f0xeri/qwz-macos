@@ -25,7 +25,12 @@ Tested on: MSI MAG X870E Tomahawk WiFi, Ryzen 7 9800X3D, WCN7850 hw2.0, macOS 26
 OpenCore, firmware WLAN.HMT.1.1.c5-00302 (linux-firmware `20260309`).
 
 - Firmware load, scanning on 2.4 and 5 GHz, background scans while connected.
-- WPA2-Personal (CCMP) and open networks; 802.11n, 2×2, 40 MHz (MCS 15, 300 Mbit/s link rate).
+- WPA2-Personal (CCMP) and open networks.
+- **802.11ac (VHT)**: 2×2, up to 80 MHz, MCS 0-9, on 5 GHz channels where the regulatory rules allow
+  80 MHz. The best link rate is 867 Mbit/s (MCS 9, short guard interval). In practice a download of
+  **500 Mbit/s** was measured, which is the limit of the internet plan it was tested on, not of the link.
+- 802.11n, 2×2, 40 MHz (MCS 15, 300 Mbit/s link rate) on 2.4 GHz, on 5 GHz access points without 11ac,
+  and everywhere with the boot-arg `-qwznovht`.
 - Native mode (QwzAirport): network list in the Wi-Fi menu, joining from the menu with the password
   stored by macOS, auto-join of known networks, private Wi-Fi address (the MAC is programmed into the
   firmware), Wi-Fi on/off from the menu, recovery after sleep (slow: ~25 s until auto-join).
@@ -34,7 +39,7 @@ OpenCore, firmware WLAN.HMT.1.1.c5-00302 (linux-firmware `20260309`).
 
 ## Limitations
 
-- **No 802.11ac/ax**: qwz uses 11n only.
+- **No 802.11ax (Wi-Fi 6/6E/7)**: qwz stops at 802.11ac. No 160 MHz, no MU-MIMO or transmit beamforming.
 - **Security types**: WPA2-Personal with CCMP and open networks only. No WPA3/SAE, no WPA2-Enterprise
   (802.1X), no TKIP-only networks, no WEP.
 - **No AirDrop, AWDL, Continuity, Handoff**: the firmware has no AWDL and this card's Bluetooth
@@ -98,7 +103,8 @@ Pins and hashes are in `config/sources.json`; `docs/DEPENDENCIES.md` explains up
 2. Copy `build/QwzWifi.kext` (and `build/QwzAirport.kext` for native Airport mode on Tahoe; skip it
    for HeliPort mode) into `EFI/OC/Kexts/`.
 3. `python3 scripts/oc-enable.py on [path/to/EFI/OC]`: backs up `config.plist`, adds the kext entries
-   and the boot-arg `-qwzon`. The driver does nothing without `-qwzon`.
+   and the boot-arg `-qwzon`. The driver does nothing without `-qwzon`. Add `-qwznovht` to turn
+   802.11ac off and stay on 802.11n.
 4. Reboot. Driver log: `scripts/qwzlog.sh` (saves `~/Desktop/qwz.log`).
 5. Undo: `python3 scripts/oc-enable.py off`, or restore the backup.
 
