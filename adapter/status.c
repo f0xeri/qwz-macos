@@ -262,7 +262,14 @@ qwzmac_qwz_channels(void *p, struct qwzmac_chan *out, int max)
 	qwzmac_spl_lock();
 	for (i = 1; i <= IEEE80211_CHAN_MAX && n < max; i++) {
 		c = &ic->ic_channels[i];
-		if (c->ic_flags == 0 || !isset(ic->ic_chan_active, i))
+		/*
+		 * Every channel the regulatory data allows, not net80211's
+		 * active set: that one follows the current phy mode, and
+		 * once associated to an 802.11ac AP (mode 11ac) it keeps only
+		 * the 5 GHz VHT channels, which dropped the 2.4 GHz networks
+		 * from the macOS Wi-Fi list.
+		 */
+		if (c->ic_flags == 0)
 			continue;
 		o = &out[n++];
 		o->channel = i;
