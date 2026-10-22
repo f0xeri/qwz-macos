@@ -44,8 +44,6 @@ OpenCore, firmware WLAN.HMT.1.1.c5-00302 (linux-firmware `20260309`).
 
 - **802.11ax is up to 80 MHz**: no 160 MHz, no TWT (target wake time), no 6 GHz band (Wi-Fi 6E), no
   Wi-Fi 7 (802.11be).
-- macOS tools show the **current** network's PHY mode as 802.11a/g (`wdutil`); its speed, MCS and
-  channel width are right, and the other networks in the list show 802.11n/ac/ax correctly.
 - **Security types**: WPA2-Personal with CCMP and open networks only. No WPA3/SAE, no WPA2-Enterprise
   (802.1X), no TKIP-only networks, no WEP.
 - **No AirDrop, AWDL, Continuity, Handoff**: the firmware has no AWDL and this card's Bluetooth
