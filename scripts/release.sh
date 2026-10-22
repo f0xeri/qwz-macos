@@ -2,10 +2,12 @@
 # Builds the kexts from the committed tree and packs a release archive into dist/:
 # the archive, SHA256SUMS.txt and RELEASE_NOTES.md. It tags and pushes nothing.
 #
-# Usage: scripts/release.sh
+# Usage: scripts/release.sh [notes-file]
+#   notes-file: what changed (Markdown), put at the top of RELEASE_NOTES.md
 # Needs: a clean git tree, patches applied (scripts/patches.sh apply), firmware fetched.
 set -e
 cd "${0:A:h}/.."
+NOTES_FILE=${1:+${1:A}}
 
 [[ -z "$(git status --porcelain)" ]] || { echo "working tree is not clean: commit or stash first"; exit 1; }
 # build.sh would embed this network and its password into QwzWifi.kext.
@@ -35,36 +37,10 @@ find $STAGE -name .DS_Store -delete
 rm -rf $DIST/stage
 (cd $DIST && shasum -a 256 *.zip > SHA256SUMS.txt)
 
-cat > $DIST/RELEASE_NOTES.md <<NOTES
-**QwzWifi $WIFI** (driver) and **QwzAirport $AIRPORT** (native Airport Wi-Fi front).
-
-Wi-Fi for the Qualcomm FastConnect 7800 / WCN7850 (PCI \`17cb:1107\`) on an x86_64 Hackintosh, based on
-OpenBSD's qwz(4). See the README for features, limitations and the OpenCore install steps.
-
-**Experimental.** It runs in the kernel: a bug can panic the Mac or, through DMA, corrupt memory.
-Back up your EFI first.
-
-## What is in the archive
-- \`QwzWifi.kext\`: the driver. On its own it gives an Ethernet interface controlled by HeliPort or
-  \`qwzctl\`; this mode is expected to work on earlier macOS versions too
-  (HeliPort supports them; only Tahoe has been tried so far).
-- \`QwzAirport.kext\`: the native Wi-Fi front (Wi-Fi menu, System Settings). Expected to work on
-  other Tahoe builds too, but verified only on 25G241; it starts only on builds in its allowlist
-  (see README). Skip it for HeliPort mode.
-- \`qwzctl\`: command-line client.
-- \`LICENSE\` (GPL-2.0), \`NOTICE.md\`, \`AIRPORT-CREDITS.txt\`, and \`FIRMWARE-NOTICE.txt\` for the
-  Qualcomm firmware embedded in \`QwzWifi.kext\`. Keep these files with any copy of the kexts.
-
-## Install
-Copy the kext(s) into \`EFI/OC/Kexts/\`, add them to \`config.plist\` and the boot-arg \`-qwzon\` (the
-driver does nothing without it); \`scripts/oc-enable.py\` in the source does this and backs up the
-config. The kexts have no developer-certificate signature (QwzAirport carries only an ad-hoc one) and
-are meant for OpenCore injection. The build contains no Wi-Fi network or password: join with HeliPort
-or from the Wi-Fi menu.
-
-Source for this build: tag \`$TAG\`. Build it yourself with \`scripts/fetch-sources.sh\`,
-\`scripts/patches.sh apply\`, \`scripts/build.sh\`. SHA-256 of the archive is in \`SHA256SUMS.txt\`.
-NOTES
+{
+  [[ -n "$NOTES_FILE" ]] && { cat "$NOTES_FILE"; echo; }
+  echo 'Experimental kernel driver: back up your EFI first. See the README for install steps. SHA-256 of the archive is in `SHA256SUMS.txt`.'
+} > $DIST/RELEASE_NOTES.md
 
 echo
 echo "Release files in $DIST/:"; ls -1 $DIST
