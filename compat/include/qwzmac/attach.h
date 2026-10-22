@@ -203,6 +203,7 @@ struct qwzmac_chan {
 #define QWZMAC_CHAN_80MHZ	0x10	/* VHT80 allowed */
 #define QWZMAC_CHAN_DFS	0x20
 #define QWZMAC_CHAN_EXT_ABOVE 0x40 /* HT40 extension channel above primary */
+#define QWZMAC_CHAN_HE		0x80	/* 802.11ax allowed (and not turned off) */
 /* The channels the firmware's regulatory domain allows; returns how many. */
 int	qwzmac_qwz_channels(void *dev, struct qwzmac_chan *out, int max);
 /*

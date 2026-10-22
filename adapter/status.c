@@ -352,6 +352,8 @@ qwzmac_qwz_channels(void *p, struct qwzmac_chan *out, int max)
 			o->flags |= QWZMAC_CHAN_40MHZ;
 		if (IEEE80211_CHAN_80MHZ_ALLOWED(c))
 			o->flags |= QWZMAC_CHAN_80MHZ;
+		if (IEEE80211_CHAN_HE(c))
+			o->flags |= QWZMAC_CHAN_HE;
 	}
 	qwzmac_spl_unlock();
 	return n;

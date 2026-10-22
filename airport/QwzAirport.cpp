@@ -912,7 +912,9 @@ QwzAirport::getHARDWARE_VERSION(IO80211SkywalkInterface *, apple80211_version_da
  * What qwz does: WPA2 (RSN) with CCMP, TKIP group keys in software, short
  * slot and preamble, WME, HT with short GI. The bits WCL looks at are
  * laobamac's (its WCL branch): no WPA1, scan completion events (byte 5),
- * no HE (byte 17).
+ * and HE (byte 17, bit 7) when 802.11ax is on: Tahoe's
+ * WCLDeviceConfiguration::isHeSupported reads it, and with the HE element of
+ * the network that is what makes macOS list the PHY mode as 802.11ax.
  */
 IOReturn
 QwzAirport::getCARD_CAPABILITIES(IO80211SkywalkInterface *, apple80211_capability_data *cd)
@@ -929,6 +931,17 @@ QwzAirport::getCARD_CAPABILITIES(IO80211SkywalkInterface *, apple80211_capabilit
 	    (1 << (APPLE80211_CAP_SHORT_GI_40MHZ - 16)) |
 	    (1 << (APPLE80211_CAP_SHORT_GI_20MHZ - 16));
 	cd->capabilities[5] = 0x40;
+	/* HE is on if the driver marked any channel as allowing it (not with -qwznohe/-qwznovht). */
+	qwzmac_chan *ch = (qwzmac_chan *)IOMalloc(sizeof(*ch) * APPLE80211_MAX_CHANNELS);
+	if (ch != nullptr) {
+		int n = fDrv.channels(fDrv.dev, ch, APPLE80211_MAX_CHANNELS);
+		for (int i = 0; i < n; i++)
+			if (ch[i].flags & QWZMAC_CHAN_HE) {
+				cd->capabilities[17] |= 0x80;
+				break;
+			}
+		IOFree(ch, sizeof(*ch) * APPLE80211_MAX_CHANNELS);
+	}
 	return kIOReturnSuccess;
 }
 
