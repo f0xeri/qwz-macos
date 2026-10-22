@@ -777,6 +777,17 @@ IOReturn QwzAirportInterface::joinCommand(OSObject *, void *a0, void *a1,
 			if (size) {
 				bzero(self->fJoinBssInfo, sizeof(self->fJoinBssInfo));
 				memcpy(self->fJoinBssInfo, &message, size);
+				/* The elements macOS gets for the joined BSS (it reads the 802.11n/ac/ax
+				 * mode from them): a property to read with ioreg, for diagnosis. */
+				char hex[2 * sizeof(message.ies) + 1];
+				size_t n = size - sizeof(message.metadata);
+				if (n > sizeof(message.ies)) n = sizeof(message.ies);
+				for (size_t i = 0; i < n; ++i) {
+					hex[2 * i] = "0123456789abcdef"[message.ies[i] >> 4];
+					hex[2 * i + 1] = "0123456789abcdef"[message.ies[i] & 15];
+				}
+				hex[2 * n] = '\0';
+				self->fCtl->setProperty("QwzAirportBssIEs", hex);
 			}
 			if (status.beacon_length >= 36 && status.beacon_length <= 2048) {
 				bzero(self->fJoinBeaconInfo, sizeof(self->fJoinBeaconInfo));
