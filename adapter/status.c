@@ -456,7 +456,17 @@ qwzmac_copy_bss(struct ieee80211com *ic, struct ieee80211_node *ni,
 	 * fields, not the elements, so build them. They come after RSN, and only
 	 * if they fit: the RSN element must not be cut.
 	 */
-	qwzmac_add_phy_ies(ni, channel, &ie, b->ies + sizeof(b->ies));
+	/*
+	 * Not for the BSS we are associated to. When macOS reads VHT or HE in
+	 * that network's elements it asks for the link's NSS, MCS and guard
+	 * interval in a way that ends in "unsupported" (airportd logs
+	 * err=0xe00002c7 for GET NSS, GET MCS INDEX, GET GUARD INTERVAL), and
+	 * wdutil shows 0 for all three. Without them it asks us, which works.
+	 * The cost is that the current network still shows as 802.11a/g.
+	 */
+	if (!(ic->ic_state == IEEE80211_S_RUN && ic->ic_bss != NULL &&
+	    IEEE80211_ADDR_EQ(ni->ni_bssid, ic->ic_bss->ni_bssid)))
+		qwzmac_add_phy_ies(ni, channel, &ie, b->ies + sizeof(b->ies));
 	b->ie_len = ie - b->ies; /* <= 34+10+3+257+24+14+29 */
 }
 
