@@ -369,6 +369,57 @@ qwzmac_qwz_scan_poll(void *p, uint32_t ticket)
 	return error;
 }
 
+/* HT operation, VHT capabilities and HE capabilities of a node, as elements. */
+static void
+qwzmac_add_phy_ies(struct ieee80211_node *ni, uint8_t **iep, uint8_t *end)
+{
+	uint8_t *ie = *iep;
+	uint8_t phy0 = ni->ni_he_phy_cap[0];
+	unsigned hemcs = IEEE80211_HE_MCS_NSS_SIZE(phy0);
+
+	if ((ni->ni_flags & IEEE80211_NODE_HTCAP) && ni->ni_primary_chan != 0 &&
+	    end - ie >= 2 + 22) {
+		*ie++ = IEEE80211_ELEMID_HTOP; *ie++ = 22;
+		*ie++ = ni->ni_primary_chan;
+		*ie++ = ni->ni_htop0;
+		*ie++ = ni->ni_htop1 & 0xff; *ie++ = ni->ni_htop1 >> 8;
+		*ie++ = ni->ni_htop2 & 0xff; *ie++ = ni->ni_htop2 >> 8;
+		memcpy(ie, ni->ni_basic_mcs, 16); ie += 16;
+	}
+	if ((ni->ni_flags & IEEE80211_NODE_VHTCAP) && end - ie >= 2 + 12) {
+		*ie++ = IEEE80211_ELEMID_VHTCAPS; *ie++ = 12;
+		*ie++ = ni->ni_vhtcaps; *ie++ = ni->ni_vhtcaps >> 8;
+		*ie++ = ni->ni_vhtcaps >> 16; *ie++ = ni->ni_vhtcaps >> 24;
+		*ie++ = ni->ni_vht_rxmcs; *ie++ = ni->ni_vht_rxmcs >> 8;
+		*ie++ = ni->ni_vht_rx_max_lgi_mbit_s;
+		*ie++ = ni->ni_vht_rx_max_lgi_mbit_s >> 8;
+		*ie++ = ni->ni_vht_txmcs; *ie++ = ni->ni_vht_txmcs >> 8;
+		*ie++ = ni->ni_vht_tx_max_lgi_mbit_s;
+		*ie++ = ni->ni_vht_tx_max_lgi_mbit_s >> 8;
+	}
+	if ((ni->ni_flags & IEEE80211_NODE_HECAP) &&
+	    end - ie >= 3 + IEEE80211_HE_CAPS_FIXED_LEN + hemcs) {
+		*ie++ = IEEE80211_ELEMID_EXTENSION;
+		*ie++ = 1 + IEEE80211_HE_CAPS_FIXED_LEN + hemcs;
+		*ie++ = IEEE80211_ELEMID_EXT_HECAPS;
+		memcpy(ie, ni->ni_he_mac_cap, IEEE80211_HE_MAC_CAPS_LEN);
+		ie += IEEE80211_HE_MAC_CAPS_LEN;
+		memcpy(ie, ni->ni_he_phy_cap, IEEE80211_HE_PHY_CAPS_LEN);
+		ie += IEEE80211_HE_PHY_CAPS_LEN;
+		*ie++ = ni->ni_he_rxmcs_80; *ie++ = ni->ni_he_rxmcs_80 >> 8;
+		*ie++ = ni->ni_he_txmcs_80; *ie++ = ni->ni_he_txmcs_80 >> 8;
+		if (phy0 & IEEE80211_HE_PHYCAP0_CHAN_WIDTH_160_IN_5G) {
+			*ie++ = ni->ni_he_rxmcs_160; *ie++ = ni->ni_he_rxmcs_160 >> 8;
+			*ie++ = ni->ni_he_txmcs_160; *ie++ = ni->ni_he_txmcs_160 >> 8;
+		}
+		if (phy0 & IEEE80211_HE_PHYCAP0_CHAN_WIDTH_8080_IN_5G) {
+			*ie++ = ni->ni_he_rxmcs_80p80; *ie++ = ni->ni_he_rxmcs_80p80 >> 8;
+			*ie++ = ni->ni_he_txmcs_80p80; *ie++ = ni->ni_he_txmcs_80p80 >> 8;
+		}
+	}
+	*iep = ie;
+}
+
 static void
 qwzmac_copy_bss(struct ieee80211com *ic, struct ieee80211_node *ni,
     struct qwzmac_scan_bss *b)
@@ -395,7 +446,16 @@ qwzmac_copy_bss(struct ieee80211com *ic, struct ieee80211_node *ni,
 		size_t len = (size_t)ni->ni_rsnie[1] + 2;
 		memcpy(ie, ni->ni_rsnie, len); ie += len;
 	}
-	b->ie_len = ie - b->ies; /* <= 34+10+3+257 = 304 */
+	/*
+	 * macOS tells 11n, 11ac and 11ax networks apart by looking for these
+	 * elements in the scan result (the HT operation, the VHT capabilities, the
+	 * HE capabilities; nothing else is checked, but the contents are used
+	 * too). Without them every 5 GHz network is "802.11a". net80211 keeps the
+	 * fields, not the elements, so build them. They come after RSN, and only
+	 * if they fit: the RSN element must not be cut.
+	 */
+	qwzmac_add_phy_ies(ni, &ie, b->ies + sizeof(b->ies));
+	b->ie_len = ie - b->ies; /* <= 34+10+3+257+24+14+29 */
 }
 
 static int
