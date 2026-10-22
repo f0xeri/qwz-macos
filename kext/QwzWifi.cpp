@@ -52,7 +52,7 @@
 #define QWZ_RATE_POLL_MS	2000
 
 extern "C" uint32_t qwz_debug;	/* qwz/qwz.c, built with QWZ_DEBUG */
-extern "C" uint32_t qwz_novht;	/* qwz/qwz.c: 1 keeps the station on 802.11n */
+extern "C" uint32_t qwz_novht;	/* qwz/qwz.c: 1 = no 802.11ac or ax */
 extern "C" uint32_t qwz_nohe;	/* qwz/qwz.c: 1 keeps the station off 802.11ax */
 
 OSDefineMetaClassAndStructors(QwzWifi, IOEthernetController)
@@ -305,11 +305,11 @@ QwzWifi::start(IOService *provider)
 	UInt32 mask = 0;
 	PE_parse_boot_argn("qwzdebug", &mask, sizeof(mask));
 	qwz_debug = mask;
-	char novht[16];
-	qwz_novht = PE_parse_boot_argn("-qwznovht", novht, sizeof(novht)) ? 1 : 0;
-	/* 802.11ax builds on 802.11n only in net80211, so -qwznovht (stay on 11n) means no 11ax either. */
+	char flag[16];
+	qwz_novht = PE_parse_boot_argn("-qwznovht", flag, sizeof(flag)) ? 1 : 0;
+	/* -qwznovht (11n only) implies no 11ax. */
 	qwz_nohe = (qwz_novht ||
-	    PE_parse_boot_argn("-qwznohe", novht, sizeof(novht))) ? 1 : 0;
+	    PE_parse_boot_argn("-qwznohe", flag, sizeof(flag))) ? 1 : 0;
 
 	fNativePreferred = getProperty("QwzNativeData") == kOSBooleanTrue;
 	bool have_net = fNativePreferred ? false : readNetwork(&net);

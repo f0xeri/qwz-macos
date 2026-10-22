@@ -7,17 +7,6 @@
 /* qwz stores the signal as a signed dBm value in net80211's u_int8_t. */
 #define QWZMAC_RSSI_DBM(ni)	((int)(int8_t)(ni)->ni_rssi)
 
-/* Match the 40 MHz peer setup in qwz_peer_assoc_h_phymode(). */
-static int
-qwzmac_chan40(struct ieee80211_node *ni)
-{
-	uint8_t sco = ni->ni_htop0 & IEEE80211_HTOP0_SCO_MASK;
-
-	return IEEE80211_CHAN_40MHZ_ALLOWED(ni->ni_chan) &&
-	    ieee80211_node_supports_ht_chan40(ni) &&
-	    (sco == IEEE80211_HTOP0_SCO_SCA || sco == IEEE80211_HTOP0_SCO_SCB);
-}
-
 /* Width in MHz the station runs on: the width the firmware vdev was started
  * with, else what the HT operation element says. */
 static int
@@ -28,7 +17,7 @@ qwzmac_width(struct ieee80211com *ic, struct ieee80211_node *ni)
 
 	if (width != 0)
 		return width;
-	return (ni->ni_flags & IEEE80211_NODE_HT) && qwzmac_chan40(ni) ? 40 : 20;
+	return (ni->ni_flags & IEEE80211_NODE_HT) && qwz_node_ht40(sc, ni) ? 40 : 20;
 }
 
 /* Spatial streams of a VHT link: those both sides handle, at most our chains. */
@@ -141,14 +130,12 @@ qwzmac_ni_tx_rate(struct ieee80211com *ic, struct ieee80211_node *ni,
 		return qwzmac_vht_rate(ic, ni, ni->ni_txmcs);
 	}
 	if (ni->ni_flags & IEEE80211_NODE_HT) {
-		for (i = 0, nss = 1; i < 4; i++)
-			if (ic->ic_sup_mcs[i] & ni->ni_rxmcs[i])
-				nss = i + 1;
+		nss = qwzmac_ht_nss(ic, ni);
 		mcs = ni->ni_txmcs;
 		if (mcs < 8)
 			mcs += 8 * (nss - 1);
 		*mcsp = mcs;
-		chan40 = qwzmac_chan40(ni);
+		chan40 = qwz_node_ht40(ic->ic_softc, ni);
 		sgi = ieee80211_ra_use_ht_sgi(ni);
 		for (i = 0; i < IEEE80211_HT_NUM_RATESETS; i++) {
 			rs = &ieee80211_std_ratesets_11n[i];

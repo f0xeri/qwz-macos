@@ -55,12 +55,14 @@ diff --git a/sys/dev/ic/qwzvar.h b/sys/dev/ic/qwzvar.h
  void	qwz_newstate_task(void *);
  
  struct qwz_node {
-@@ -2234,3 +2260,8 @@ static inline enum ieee80211_edca_ac qwz_tid_to_ac(uint32_t tid)
+@@ -2234,3 +2260,10 @@ static inline enum ieee80211_edca_ac qwz_tid_to_ac(uint32_t tid)
  		((tid == 4) || (tid == 5)) ? EDCA_AC_VI :
  		EDCA_AC_VO);
  }
 +
 +#ifdef QWZMAC
++/* qwz.c: whether the BSS runs 40 MHz (HT secondary channel). */
++int qwz_node_ht40(struct qwz_softc *, struct ieee80211_node *);
 +/* qwz.c: width in MHz the station vdev runs on, 0 while it is not started. */
 +int qwz_vdev_width(struct qwz_vif *);
 +#endif

@@ -614,11 +614,11 @@ IOReturn QwzAirportInterface::getRATE(apple80211_rate_data *out)
 }
 IOReturn QwzAirportInterface::getMCS(apple80211_mcs_data *out)
 {
-	return fCtl->gate()->runAction(joinCommand, this, (void *)13, out);
+	return fCtl->gate()->runAction(joinCommand, this, (void *)12, out);
 }
 IOReturn QwzAirportInterface::getMCS_VHT(apple80211_mcs_vht_data *out)
 {
-	return fCtl->gate()->runAction(joinCommand, this, (void *)15, out);
+	return fCtl->gate()->runAction(joinCommand, this, (void *)13, out);
 }
 IOReturn QwzAirportInterface::getGUARD_INTERVAL(apple80211_guard_interval_data *out)
 {
@@ -660,13 +660,12 @@ IOReturn QwzAirportInterface::joinCommand(OSObject *, void *a0, void *a1,
 {
 	auto self = static_cast<QwzAirportInterface *>(a0);
 	unsigned operation = static_cast<unsigned>(reinterpret_cast<uintptr_t>(a1));
-	if (operation >= 9 && operation <= 15 && operation != 12) {
+	if (operation >= 9 && operation <= 14) {
 		if (!a2) return kIOReturnBadArgument;
 		if (self->fJoinStation.state != 4) return kIOReturnNotReady;
-		/* The station snapshot is taken once, at join. airportd asks for the
-		 * signal, rate, MCS and guard interval all along the connection: refresh it
-		 * from the driver (a quick read under its lock, no firmware call), but
-		 * only while still on the same BSS. */
+		/* The snapshot is taken at join, but airportd keeps asking for signal,
+		 * rate and MCS: refresh it from the driver (a quick read, no firmware
+		 * call) while still on the same BSS. */
 		if (operation != 9) {
 			qwzmac_sta_info fresh;
 			auto drv = self->fCtl->driver();
@@ -674,18 +673,16 @@ IOReturn QwzAirportInterface::joinCommand(OSObject *, void *a0, void *a1,
 			    !memcmp(fresh.bssid, self->fJoinStation.bssid, 6))
 				self->fJoinStation = fresh;
 		}
-		if (operation == 13) {
+		if (operation == 12) {
 			auto out = static_cast<apple80211_mcs_data *>(a2);
 			bzero(out, sizeof(*out));
 			out->version = APPLE80211_VERSION;
 			out->index = self->fJoinStation.mcs > 0 ? static_cast<uint32_t>(self->fJoinStation.mcs) : 0;
 			return kIOReturnSuccess;
 		}
-		if (operation == 15) {
-			/* For an 802.11ac or ax link macOS asks for MCS, streams, width and
-			 * guard interval in this one request, and answers "unsupported" to the
-			 * single-field ones (GET MCS INDEX, GET NSS, GET GUARD INTERVAL) if it
-			 * fails: wdutil then shows 0 for all three. */
+		if (operation == 13) {
+			/* On an 802.11ac/ax link macOS reads MCS, streams, width and guard
+			 * interval from this one request; without it wdutil shows 0. */
 			auto out = static_cast<apple80211_mcs_vht_data *>(a2);
 			bzero(out, sizeof(*out));
 			out->version = APPLE80211_VERSION;
@@ -796,17 +793,6 @@ IOReturn QwzAirportInterface::joinCommand(OSObject *, void *a0, void *a1,
 			if (size) {
 				bzero(self->fJoinBssInfo, sizeof(self->fJoinBssInfo));
 				memcpy(self->fJoinBssInfo, &message, size);
-				/* The elements macOS gets for the joined BSS (it reads the 802.11n/ac/ax
-				 * mode from them): a property to read with ioreg, for diagnosis. */
-				char hex[2 * sizeof(message.ies) + 1];
-				size_t n = size - sizeof(message.metadata);
-				if (n > sizeof(message.ies)) n = sizeof(message.ies);
-				for (size_t i = 0; i < n; ++i) {
-					hex[2 * i] = "0123456789abcdef"[message.ies[i] >> 4];
-					hex[2 * i + 1] = "0123456789abcdef"[message.ies[i] & 15];
-				}
-				hex[2 * n] = '\0';
-				self->fCtl->setProperty("QwzAirportBssIEs", hex);
 			}
 			if (status.beacon_length >= 36 && status.beacon_length <= 2048) {
 				bzero(self->fJoinBeaconInfo, sizeof(self->fJoinBeaconInfo));
