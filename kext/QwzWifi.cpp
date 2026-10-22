@@ -307,7 +307,9 @@ QwzWifi::start(IOService *provider)
 	qwz_debug = mask;
 	char novht[16];
 	qwz_novht = PE_parse_boot_argn("-qwznovht", novht, sizeof(novht)) ? 1 : 0;
-	qwz_nohe = PE_parse_boot_argn("-qwznohe", novht, sizeof(novht)) ? 1 : 0;
+	/* 802.11ax builds on 802.11n only in net80211, so -qwznovht (stay on 11n) means no 11ax either. */
+	qwz_nohe = (qwz_novht ||
+	    PE_parse_boot_argn("-qwznohe", novht, sizeof(novht))) ? 1 : 0;
 
 	fNativePreferred = getProperty("QwzNativeData") == kOSBooleanTrue;
 	bool have_net = fNativePreferred ? false : readNetwork(&net);
